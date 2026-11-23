@@ -1,4 +1,6 @@
-use sidenote::core::meeting_delete::{DeleteError, Eligibility, Phase, Storage, suppressed_ids};
+use sidenote::core::meeting_delete::{
+    DeleteError, Eligibility, MoveEvent, Phase, Storage, WriteStage, suppressed_ids,
+};
 use std::{fs, path::PathBuf};
 
 struct Fixture {
@@ -275,4 +277,127 @@ fn journaled_stop_recovers_each_member() {
             assert_eq!(suppressed_ids(&f.state).unwrap().len(), count);
         }
     }
+}
+
+#[test]
+fn ancestry_is_established_before_receipt_and_move() {
+    let steps = [
+        MoveEvent::SyncState,
+        MoveEvent::CreatedRecycleRoot,
+        MoveEvent::SyncLocal,
+        MoveEvent::CreatedTransaction,
+        MoveEvent::SyncRecycleRoot,
+    ];
+    for stop in 0..=steps.len() {
+        let f = Fixture::new();
+        f.write("meetings/10/manifest.json", b"{}");
+        f.write("meetings/10/notes.md", b"owned");
+        assert!(!f.state.join("local").exists());
+        let mut events = Vec::new();
+        let result = f.storage().delete(
+            "10",
+            String::new(),
+            10,
+            |_| Ok(Eligibility::Ready),
+            |event| {
+                events.push(event);
+                if steps.get(stop) == Some(&event) {
+                    return Err(std::io::Error::other("directory operation failed"));
+                }
+                Ok(())
+            },
+        );
+        if stop < steps.len() {
+            assert!(matches!(result, Err(DeleteError::Failed(_))));
+            assert_eq!(events, steps[..=stop]);
+            assert_eq!(
+                fs::read(f.meetings.join("10/manifest.json")).unwrap(),
+                b"{}"
+            );
+            assert!(suppressed_ids(&f.state).unwrap().is_empty());
+        } else {
+            result.unwrap();
+            assert!(events.starts_with(&steps));
+            assert_eq!(
+                events[steps.len()],
+                MoveEvent::Journal(Phase::Deleting, WriteStage::Flush)
+            );
+        }
+    }
+}
+
+#[test]
+fn oversized_title_and_expanded_inventory_refuse_before_a_move() {
+    let f = recorded_fixture(false);
+    let s = f.storage();
+    let txn = s
+        .delete(
+            "10",
+            String::new(),
+            10,
+            |_| Ok(Eligibility::Ready),
+            |_| Ok(()),
+        )
+        .unwrap();
+    let baseline = fs::metadata(
+        f.state
+            .join("local/deleted-meetings")
+            .join(txn)
+            .join("receipt.json"),
+    )
+    .unwrap()
+    .len();
+    let cap = sidenote::core::file_reads::SUMMARY_MAX;
+    for (multipart, size) in [(false, cap), (true, cap - baseline - 16)] {
+        let f = recorded_fixture(multipart);
+        let result = f.storage().delete(
+            "10",
+            "x".repeat(size as usize),
+            10,
+            |_| Ok(Eligibility::Ready),
+            |_| panic!("oversized metadata advanced"),
+        );
+        assert!(matches!(result, Err(DeleteError::Failed(_))));
+        assert_eq!(
+            fs::read(f.meetings.join("10/unknown/bytes")).unwrap(),
+            b"\0\xff"
+        );
+        assert_eq!(f.meetings.join("11").exists(), multipart);
+        assert!(suppressed_ids(&f.state).unwrap().is_empty());
+        assert!(!f.state.join("local/deleted-meetings").exists());
+    }
+}
+
+#[test]
+fn accumulated_suppression_limit_preserves_existing_metadata_and_source() {
+    let f = recorded_fixture(false);
+    let cap = sidenote::core::file_reads::SUMMARY_MAX as usize;
+    let mut map = std::collections::BTreeMap::new();
+    let owner = "a".repeat(32);
+    for id in 0..((cap - 1) / 138) {
+        map.insert(format!("{id:0100}"), owner.clone());
+    }
+    let slack = cap - serde_json::to_vec(&map).unwrap().len();
+    if slack > 38 {
+        map.insert("9".repeat(slack - 38), owner);
+    }
+    let bytes = serde_json::to_vec(&map).unwrap();
+    f.write("state/local/deleted-meeting-ids.json", &bytes);
+    let result = f.storage().delete(
+        "10",
+        String::new(),
+        10,
+        |_| Ok(Eligibility::Ready),
+        |_| panic!("oversized suppression advanced"),
+    );
+    assert!(matches!(result, Err(DeleteError::Failed(_))));
+    assert_eq!(
+        fs::read(f.state.join("local/deleted-meeting-ids.json")).unwrap(),
+        bytes
+    );
+    assert_eq!(suppressed_ids(&f.state).unwrap().len(), map.len());
+    assert_eq!(
+        fs::read(f.meetings.join("10/unknown/bytes")).unwrap(),
+        b"\0\xff"
+    );
 }
