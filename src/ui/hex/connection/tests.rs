@@ -163,6 +163,10 @@ fn stale_bound_expires_availability_but_keeps_stop() {
 #[test]
 #[cfg(windows)]
 fn unknown_status_does_not_offer_to_open_an_installed_hex() {
+    fn setup_view(state: &State, _: &mut rune::Cx<State>) -> rune::El {
+        hex::setup::card(state, theme::palette(false)).unwrap_or_else(rune::el)
+    }
+
     struct RestoreInstallDetect(bool);
     impl Drop for RestoreInstallDetect {
         fn drop(&mut self) {
@@ -184,8 +188,37 @@ fn unknown_status_does_not_offer_to_open_an_installed_hex() {
     state.hex_status_at(Ok(good), Instant::now() - Duration::from_secs(11));
     assert!(state.hex_status_unknown());
     assert!(hex::setup::card(&state, theme::palette(false)).is_none());
-    state.hex_apply(Msg::Status(Err(HexError::HexNotRunning)));
-    assert!(hex::setup::card(&state, theme::palette(false)).is_some());
+    let mut runtime = rune::Runtime::new(state, setup_view, (640.0, 480.0), rune::Env::default());
+    runtime.state.hex.install = sidenote::hex_install::State::Complete;
+    for error in [
+        HexError::Timeout,
+        HexError::Failed {
+            code: None,
+            stderr_summary: "synthetic",
+        },
+    ] {
+        runtime.state.hex_apply(Msg::Status(Err(error)));
+        runtime.invalidate();
+        runtime.frame(0.0);
+        assert!(
+            runtime
+                .elements()
+                .iter()
+                .all(|element| element.key.as_deref() != Some("hex-setup-open"))
+        );
+    }
+    runtime.state.hex.install = sidenote::hex_install::State::Idle;
+    runtime
+        .state
+        .hex_apply(Msg::Status(Err(HexError::HexNotRunning)));
+    runtime.invalidate();
+    runtime.frame(0.0);
+    assert!(
+        runtime
+            .elements()
+            .iter()
+            .any(|element| element.key.as_deref() == Some("hex-setup-open"))
+    );
 }
 
 #[test]
