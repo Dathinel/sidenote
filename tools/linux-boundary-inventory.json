@@ -57,7 +57,7 @@
   "src/core/mcp_connect/isolated_tests.rs": "5cfa80ba44ac60c9df438f5318291637c27b669845fcaecb0852ccda7ec45745",
   "src/core/mcp_connect/json_config.rs": "a5597e62557288a1ffdc8a5cf00a3caefbe3b905a0a63e733fe4c9d1df5e8fac",
   "src/core/meeting_delete.rs": "ce263c8f8d168651a626763517f3907dbcaddf26f933cd4d78c44338bbb258e2",
-  "src/core/meeting_evidence.rs": "6bf34fb8c1eb2cbb390f0df5c067a158e02b73f888d8778b0ad991f6c99ce35d",
+  "src/core/meeting_evidence.rs": "8330fa5400f69a56ea22890b7052af632e0186c1048855cb16f82fa2106b6441",
   "src/core/meeting_evidence/speech_host_tests.rs": "e9c6c885ffae4026ea94bfc8bebc158258a2e31d729e0196108c9554655feba5",
   "src/core/meeting_job.rs": "5c3051f8f4e0873415705505823b6dcff3a15360b74889ec50c2612ee89ffe05",
   "src/core/meeting_job/checkpoint.rs": "6c21475b0a2c6400906e8fd03d6deed17224af530dd3079cf6ffa7d870cb86c6",

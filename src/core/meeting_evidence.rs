@@ -142,9 +142,9 @@ impl Collector {
         );
         let source = recording.then(|| discover(meetings, status)).flatten();
         if let Some(source) = source {
-            if self.active.as_ref().is_some_and(|a| a.source != source) {
-                let previous = self.active.take().unwrap();
+            if let Some(previous) = self.active.as_ref().filter(|a| a.source != source) {
                 self.collect_with_limit(&previous.source, true, upload)?;
+                self.active = None;
             }
             self.active.get_or_insert(Active {
                 source,
@@ -1143,6 +1143,43 @@ mod tests {
         assert!(!collector.root.join("100-1").exists());
         store.restore(&id).unwrap();
         assert_eq!(fs::read(staged.join("audio.wav")).unwrap(), before);
+    }
+
+    #[test]
+    fn source_switch_retries_final_tail_after_a_busy_claim() {
+        let temp = tempfile::tempdir().unwrap();
+        let meetings = temp.path().join("meetings");
+        let first = meetings.join("100-1");
+        fs::create_dir_all(&first).unwrap();
+        fs::create_dir(meetings.join("100-2")).unwrap();
+        audio(&first.join("system.wav"), 1);
+        let mut collector = Collector::new(temp.path());
+        let running = |id| json!({"meeting_state":"recording","id":id});
+        collector
+            .capture(&running("100-1"), &meetings, false)
+            .unwrap();
+
+        let held = crate::core::meeting_delete::writer_claim(temp.path(), "100-1").unwrap();
+        let dest = collector.root.join("100-1");
+        assert!(
+            collector
+                .capture(&running("100-2"), &meetings, false)
+                .is_err()
+        );
+        assert!(!dest.join("collection.json").exists());
+        drop(held);
+
+        collector
+            .capture(&running("100-2"), &meetings, false)
+            .unwrap();
+        assert!(dest.join("collection.json").is_file());
+        let tail = jobs(&dest).unwrap();
+        assert_eq!(tail.len(), 1);
+        assert_eq!((tail[0].1.start, tail[0].1.end), (0, RATE));
+        assert_eq!(
+            collector.active.as_ref().unwrap().source,
+            meetings.join("100-2")
+        );
     }
 
     #[test]
