@@ -1306,7 +1306,7 @@ fn recorder_start_block_reason(s: &State) -> Option<&'static str> {
     } else if matches!(h.status, Some(Err(HexError::HexNotRunning))) {
         Some("Open Hex, then try New meeting again.")
     } else if h.status.is_none() || h.caps_loading {
-        Some("Checking for Hex. This takes a few seconds.")
+        Some("Checking for Hex")
     } else if !h.running() {
         Some("This version of Hex is not supported.")
     } else if h
@@ -1321,7 +1321,7 @@ fn recorder_start_block_reason(s: &State) -> Option<&'static str> {
     } else if h.lacks(Feature::RecordStart) {
         Some("This Hex build cannot record")
     } else if !h.can(Feature::RecordStart) {
-        Some("Checking for Hex. This takes a few seconds.")
+        Some("Checking for Hex")
     } else {
         None
     }
