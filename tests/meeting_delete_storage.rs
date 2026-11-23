@@ -628,7 +628,13 @@ fn every_restore_boundary_can_be_retried_after_reopen() {
         });
         assert!(err.is_err());
         let hidden = suppressed_ids(&f.state).unwrap();
-        assert_eq!(hidden.contains("10"), expected_event != MoveEvent::Unhidden);
+        assert_eq!(
+            hidden.contains("10"),
+            !matches!(
+                expected_event,
+                MoveEvent::Unhide(WriteStage::Published) | MoveEvent::Unhidden
+            )
+        );
         let restarted = f.storage();
         restarted.restore(&id).unwrap();
         assert_eq!(restarted.recover(&id).unwrap(), Phase::Restored);
