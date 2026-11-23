@@ -387,7 +387,7 @@
 
   "src/sync_owner/mcp.rs": "0f59d5b4431ac3b617b0621351e09005116e2d09492693abc47da3fbf614e724",
 
-  "src/ui/ai_notes.rs": "26cd61289d87901884a499317bbb6b33c31a3d5db652535a245f5486c22fff9f",
+  "src/ui/ai_notes.rs": "4f070e124e1f704230aa1f3348b0d5050f9ed795a13320175726fe5e1de039af",
 
   "src/ui/annotations.rs": "a8961c9c0cbb7fe34e63eb6d62dad6c9b9f3cd138d1ee9a35dd5babfd7fd3bc6",
 
@@ -421,7 +421,7 @@
 
   "src/ui/hex/connection/stop_tests/readiness.rs": "1affb66b203a249c971286341d62d22e1b33b3ce745619949bae00e3208c6d81",
 
-  "src/ui/hex/settings.rs": "dd078512282676503bb37cd31b48ac032f5fa60040c87f0bad4a2364572052d0",
+  "src/ui/hex/settings.rs": "0ee9a7b60963e1d648adc4aea6b355fd3d1fa62cba6626e87587b0177ecad54a",
 
   "src/ui/hex/setup.rs": "494e5d0651bff961f55877cadcd419e11f9e9b25221059e9520e458a52be2eb2",
 
