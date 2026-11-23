@@ -687,7 +687,6 @@ fn scope_choice(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
         .build(k, layer)
 }
 
-/// The width and height of the send and Stop slot.
 const ACTION: f32 = 28.0;
 
 /// The round button at the pill's right end: a send arrow once there is text, a Stop square
@@ -740,13 +739,10 @@ fn action(s: &State, p: Palette, ready: bool, pending: bool) -> El {
 
 /// What the pill says when no agent CLI is on this machine.
 fn no_agent(s: &State, p: Palette) -> El {
-    let mut note = col()
-        .min_w(0.0)
-        .gap(2.0)
-        .child(roles::CONTROL.wrap(
-            "Ask works with Claude Code, Codex or OpenCode. Meeting summaries need Claude Code.",
-            p.ink,
-        ));
+    let mut note = col().min_w(0.0).gap(2.0).child(roles::CONTROL.wrap(
+        "Ask works with Claude Code, Codex or OpenCode. Meeting summaries need Claude Code.",
+        p.ink,
+    ));
     if s.agents_rechecked {
         note = note.child(roles::META.wrap(
             "Still not found. If you just installed one, press Check again, or restart Sidenote if it still fails.",
