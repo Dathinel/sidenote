@@ -677,9 +677,11 @@ impl State {
     }
 
     fn toggle_list_tick(&mut self, key: &TickKey) {
-        let task = self.tasks.items.iter().find(|task| {
-            task.meeting_id == key.0 && core::diary::task_identity(task) == key.1
-        });
+        let task = self
+            .tasks
+            .items
+            .iter()
+            .find(|task| task.meeting_id == key.0 && core::diary::task_identity(task) == key.1);
         let Some(task) = task else {
             return;
         };
