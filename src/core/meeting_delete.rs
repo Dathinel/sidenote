@@ -1,8 +1,9 @@
 //! Explicit ownership for local meeting recycling.
-use super::{file_reads, store_io};
+pub use super::store_io::WriteStage;
+use super::{file_reads, meeting_parts::Part, store_io};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs, io,
     path::{Component, Path, PathBuf},
 };
@@ -26,6 +27,18 @@ pub struct Inventory {
     pub ids: BTreeSet<String>,
     pub members: Vec<Member>,
     pub hex_inputs: Vec<HexInput>,
+}
+
+#[derive(Deserialize)]
+struct Session {
+    id: String,
+    parts: Vec<Part>,
+}
+
+struct Selection {
+    ids: BTreeSet<String>,
+    physical: BTreeSet<String>,
+    multipart: bool,
 }
 
 pub struct Storage {
@@ -187,17 +200,95 @@ impl Storage {
         Ok(self.state.join(relative))
     }
 
-    pub fn inventory(&self, id: &str) -> io::Result<Inventory> {
+    fn selection(&self, id: &str) -> io::Result<Selection> {
         if !valid_id(id) {
             return Err(invalid());
         }
+        let records = self.state.join("local/meeting-parts");
+        let mut sessions = Vec::new();
+        if metadata(&records)?.is_some() {
+            for entry in fs::read_dir(&records)? {
+                let entry = entry?;
+                let path = entry.path();
+                if path.extension().is_none_or(|e| e != "json") {
+                    continue;
+                }
+                let session: Session = read(&path)?;
+                if !valid_id(&session.id)
+                    || path.file_stem().and_then(|s| s.to_str()) != Some(session.id.as_str())
+                    || session.parts.iter().any(|p| !valid_id(&p.id))
+                {
+                    return Err(invalid());
+                }
+                sessions.push(session);
+            }
+        }
+        let mut ids = BTreeSet::from([id.to_owned()]);
+        let mut physical = BTreeSet::new();
+        let aggregate = PathBuf::from("local/meeting-inputs").join(id);
+        let session = sessions.iter().find(|s| s.id == id);
+        if let Some(session) = session {
+            for part in &session.parts {
+                if !physical.insert(part.id.clone()) {
+                    return Err(invalid());
+                }
+                ids.insert(part.id.clone());
+            }
+            if !physical.contains(id) && metadata(&self.meetings.join(id))?.is_some() {
+                return Err(invalid());
+            }
+        } else {
+            if metadata(&self.state.join(aggregate))?.is_some() {
+                return Err(invalid());
+            }
+            physical.insert(id.to_owned());
+        }
+        if sessions
+            .iter()
+            .filter(|s| s.id != id)
+            .any(|s| ids.contains(&s.id) || s.parts.iter().any(|p| ids.contains(&p.id)))
+        {
+            return Err(invalid());
+        }
+        Ok(Selection {
+            ids,
+            physical,
+            multipart: session.is_some(),
+        })
+    }
+
+    pub fn inventory(&self, id: &str) -> io::Result<Inventory> {
+        self.inventory_selected(id, self.selection(id)?)
+    }
+
+    fn inventory_selected(&self, id: &str, selection: Selection) -> io::Result<Inventory> {
+        let Selection {
+            ids,
+            physical,
+            multipart,
+        } = selection;
         let mut inventory = Inventory {
-            ids: BTreeSet::from([id.to_owned()]),
+            ids,
             members: Vec::new(),
             hex_inputs: Vec::new(),
         };
-        self.physical(id, &mut inventory)?;
-        self.state_members(id, &mut inventory.members)?;
+        if multipart {
+            let aggregate = PathBuf::from("local/meeting-inputs").join(id);
+            let _: serde_json::Map<String, serde_json::Value> =
+                read(&self.state.join(&aggregate).join("manifest.json"))?;
+            self.member(aggregate, true, &mut inventory.members)?;
+            self.member(
+                PathBuf::from("local/meeting-parts").join(format!("{id}.json")),
+                true,
+                &mut inventory.members,
+            )?;
+        }
+        for part in physical {
+            self.physical(&part, &mut inventory)?;
+        }
+        for id in &inventory.ids {
+            self.state_members(id, &mut inventory.members)?;
+        }
         Ok(inventory)
     }
 
@@ -293,5 +384,105 @@ impl Storage {
             return Err(invalid());
         }
         Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Eligibility {
+    #[default]
+    Ready,
+    Recording,
+    Paused,
+    Processing,
+    UnsavedNotes,
+    Peer,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub enum Phase {
+    Deleting,
+    Deleted,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MoveEvent {
+    SyncState,
+    CreatedRecycleRoot,
+    SyncLocal,
+    CreatedTransaction,
+    SyncRecycleRoot,
+    Journal(Phase, WriteStage),
+    Suppression(WriteStage),
+    Receipt,
+    Suppressed,
+    Moved(usize),
+    Recorded(usize),
+    SyncMove(usize, bool),
+    Finished(Phase),
+}
+
+#[derive(Debug)]
+pub enum DeleteError {
+    Refused(Eligibility),
+    Failed(io::Error),
+    Partial {
+        transaction: String,
+        source: io::Error,
+    },
+}
+
+impl From<io::Error> for DeleteError {
+    fn from(source: io::Error) -> Self {
+        Self::Failed(source)
+    }
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct Receipt {
+    pub title: String,
+    pub ids: BTreeSet<String>,
+    pub deleted_ms: i64,
+    pub phase: Phase,
+    transaction: String,
+    members: Vec<Member>,
+    pub hex_inputs: Vec<HexInput>,
+    moved: Vec<bool>,
+}
+
+type Suppression = BTreeMap<String, String>;
+
+fn suppression_path(state: &Path) -> PathBuf {
+    state.join("local/deleted-meeting-ids.json")
+}
+
+pub fn suppressed_ids(state: &Path) -> io::Result<BTreeSet<String>> {
+    Ok(store_io::read::<Suppression>(&suppression_path(state))?
+        .into_keys()
+        .collect())
+}
+
+pub fn writer_claim(state: &Path, id: &str) -> io::Result<fs::File> {
+    if !valid_id(id) {
+        return Err(invalid());
+    }
+    store_io::lock(&state.join("local/deleted-meeting-claims").join(id))
+}
+
+impl Storage {
+    fn transaction(&self, id: &str) -> io::Result<PathBuf> {
+        if !super::device::valid_id(id) {
+            return Err(invalid());
+        }
+        Ok(self.state.join("local/deleted-meetings").join(id))
+    }
+
+    pub fn receipt(&self, id: &str) -> io::Result<Receipt> {
+        let (seal, data): (String, Receipt) = read(&self.transaction(id)?.join("receipt.json"))?;
+        if seal != blake3::hash(&serde_json::to_vec(&data)?).to_hex().as_str()
+            || data.transaction != id
+        {
+            return Err(invalid());
+        }
+        Ok(data)
     }
 }

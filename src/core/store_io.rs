@@ -180,8 +180,18 @@ impl Drop for Temp {
         let _ = fs::remove_file(&self.path);
     }
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WriteStage {
+    Flush,
+    Replace,
+}
+
 #[cfg(windows)]
-fn temporary(path: &Path, bytes: &[u8]) -> io::Result<Temp> {
+fn temporary(
+    path: &Path,
+    bytes: &[u8],
+    check: &mut impl FnMut(WriteStage) -> io::Result<()>,
+) -> io::Result<Temp> {
     let parent = checked_parent(path)?;
     let name = parent.path.join(format!(
         ".{}.{}.tmp",
@@ -202,14 +212,23 @@ fn temporary(path: &Path, bytes: &[u8]) -> io::Result<Temp> {
     };
     let file = temp.file.as_mut().unwrap();
     file.write_all(bytes)?;
+    check(WriteStage::Flush)?;
     file.sync_all()?;
     temp.file.take();
     Ok(temp)
 }
 pub(super) fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    atomic_write_checked(path, bytes, |_| Ok(()))
+}
+
+pub(super) fn atomic_write_checked(
+    path: &Path,
+    bytes: &[u8],
+    mut check: impl FnMut(WriteStage) -> io::Result<()>,
+) -> io::Result<()> {
     #[cfg(all(test, target_os = "linux"))]
     super::speech_sessions::tests::interrupt(path, None)?;
-    let temp = temporary(path, bytes)?;
+    let temp = temporary(path, bytes, &mut check)?;
     #[cfg(all(test, target_os = "linux", feature = "asr-runtime"))]
     if path.parent().is_some_and(|p| p.ends_with("input")) {
         crate::service::speech::proofs::crash(path, "input");
@@ -221,6 +240,7 @@ pub(super) fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
         ._parent
         .path
         .join(path.file_name().ok_or_else(|| invalid("Missing name"))?);
+    check(WriteStage::Replace)?;
     crate::platform::replace_file(&temp.path, &target)
 }
 
@@ -242,7 +262,7 @@ pub(super) fn fingerprint(parts: impl IntoIterator<Item = impl AsRef<str>>) -> S
 
 /// Publish a flushed immutable file with a write-through rename that refuses replacement.
 pub(super) fn publish(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    let temp = temporary(path, bytes)?;
+    let temp = temporary(path, bytes, &mut |_| Ok(()))?;
     #[cfg(windows)]
     let target = path.to_owned();
     #[cfg(unix)]
@@ -394,7 +414,11 @@ pub(crate) fn lock(path: &Path) -> io::Result<fs::File> {
     unreachable!()
 }
 #[cfg(unix)]
-fn temporary(path: &Path, bytes: &[u8]) -> io::Result<Temp> {
+fn temporary(
+    path: &Path,
+    bytes: &[u8],
+    check: &mut impl FnMut(WriteStage) -> io::Result<()>,
+) -> io::Result<Temp> {
     use std::os::unix::fs::OpenOptionsExt;
     let parent = checked_parent(path)?;
     let name = parent.path.join(format!(
@@ -402,21 +426,25 @@ fn temporary(path: &Path, bytes: &[u8]) -> io::Result<Temp> {
         path.file_name().unwrap_or_default().to_string_lossy(),
         super::device::random_id()?
     ));
-    let mut file = fs::OpenOptions::new()
+    let file = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .mode(0o600)
         .custom_flags(libc::O_NOFOLLOW)
         .open(&name)?;
-    #[cfg(all(test, target_os = "linux"))]
-    super::speech_sessions::tests::interrupt(path, Some(&mut file))?;
-    file.write_all(bytes)?;
-    file.sync_all()?;
-    Ok(Temp {
+    let mut temp = Temp {
         path: name,
-        file: None,
+        file: Some(file),
         _parent: parent,
-    })
+    };
+    let file = temp.file.as_mut().unwrap();
+    #[cfg(all(test, target_os = "linux"))]
+    super::speech_sessions::tests::interrupt(path, Some(file))?;
+    file.write_all(bytes)?;
+    check(WriteStage::Flush)?;
+    file.sync_all()?;
+    temp.file.take();
+    Ok(temp)
 }
 
 #[cfg(all(test, unix))]

@@ -31,6 +31,21 @@ impl Fixture {
     fn storage(&self) -> Storage {
         Storage::new(&self.meetings, &self.state).unwrap()
     }
+    fn session(&self, id: &str, parts: &[&str]) {
+        let parts: Vec<_> = parts
+            .iter()
+            .map(|id| serde_json::json!({"id":id,"started_ms":0,"duration_ms":1}))
+            .collect();
+        self.write(
+            &format!("state/local/meeting-parts/{id}.json"),
+            &serde_json::to_vec(&serde_json::json!({"id":id,"parts":parts,"phase":"Ended"}))
+                .unwrap(),
+        );
+        self.write(
+            &format!("state/local/meeting-inputs/{id}/manifest.json"),
+            b"{}",
+        );
+    }
 }
 
 #[test]
@@ -94,4 +109,56 @@ fn junction_in_owned_tree_refuses_inventory() {
     );
     assert!(f.storage().inventory("10").is_err());
     assert!(junction.is_dir());
+}
+
+fn bytes_at(path: &std::path::Path) -> Vec<(PathBuf, Vec<u8>)> {
+    let mut pending = vec![path.to_owned()];
+    let mut bytes = Vec::new();
+    while let Some(file) = pending.pop() {
+        if file.is_dir() {
+            pending.extend(
+                fs::read_dir(file)
+                    .unwrap()
+                    .map(|entry| entry.unwrap().path()),
+            );
+        } else {
+            bytes.push((
+                file.strip_prefix(path).unwrap().to_owned(),
+                fs::read(file).unwrap(),
+            ));
+        }
+    }
+    bytes.sort();
+    bytes
+}
+
+#[test]
+fn multipart_inventory_attributes_only_exclusive_parts_and_state() {
+    let f = Fixture::new();
+    f.session("10", &["10", "11"]);
+    f.write("meetings/10/manifest.json", b"{}");
+    f.write("meetings/11/manifest.json", b"{}");
+    f.write("meetings/12/manifest.json", b"{}");
+    f.write("state/local/evidence/11/audio.wav", b"owned");
+    let store = f.storage();
+    let inventory = store.inventory("10").unwrap();
+    assert_eq!(inventory.ids.into_iter().collect::<Vec<_>>(), ["10", "11"]);
+    assert_eq!(inventory.members.len(), 3);
+    assert_eq!(
+        bytes_at(&f.state.join("local/evidence/11")),
+        [(PathBuf::from("audio.wav"), b"owned".to_vec())]
+    );
+    assert_eq!(
+        inventory
+            .hex_inputs
+            .iter()
+            .filter(|entry| entry.directory)
+            .count(),
+        2
+    );
+    f.session("12", &["11"]);
+    assert!(store.inventory("10").is_err());
+    fs::remove_file(f.state.join("local/meeting-parts/12.json")).unwrap();
+    fs::remove_file(f.meetings.join("11/manifest.json")).unwrap();
+    assert!(store.inventory("10").is_err());
 }
