@@ -19,6 +19,7 @@ import shutil
 import sys
 import time
 from pathlib import Path
+import runpy
 
 NOTES_START, NOTES_END = "<!-- hex:notes -->", "<!-- /hex:notes -->"
 # The translation model sometimes drops the milliseconds.
@@ -90,8 +91,12 @@ def renderer():
     return module
 
 
-def main():
-    meeting = renderer().no_links(Path(sys.argv[1]))
+guarded_meeting = runpy.run_path(Path(__file__).with_name("hex-pipeline-run.py"))["guarded_meeting"]
+
+
+@guarded_meeting
+def publish(meeting):
+    meeting = renderer().no_links(meeting)
     manifest_path = meeting / "manifest.json"
     if not manifest_path.exists():
         print(f"Not a Hex meeting folder (no manifest.json): {meeting}")
@@ -162,4 +167,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    publish(sys.argv[1])
