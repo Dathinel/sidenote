@@ -786,9 +786,16 @@ pub fn section(s: &State, k: &Kit, p: Palette, part: Part) -> El {
     if let Some(pending) = a.pending {
         c = c.child(roles::SMALL.wrap(pending, p.soft).role("status"));
     }
+    let inline_model_error = part == Part::Helpers
+        && a.other_model
+        && a.helper_save
+        && a.settings
+            .as_ref()
+            .and_then(NotesSettings::effective_helper)
+            .is_some();
     if let Some(error) = &a.error
         && a.editor_target.is_none()
-        && !(part == Part::Helpers && a.other_model && a.helper_save)
+        && !inline_model_error
     {
         c = c.child(super::widgets::banner(
             "Settings need attention",
