@@ -631,6 +631,46 @@ impl State {
         safe
     }
 
+    pub(super) fn live_delete_refusal(
+        &self,
+        meeting: &sidenote::core::Meeting,
+    ) -> Option<sidenote::core::meeting_delete::Eligibility> {
+        use sidenote::core::meeting_delete::Eligibility;
+        if meeting.device.is_some() {
+            return Some(Eligibility::Peer);
+        }
+        if let Some(live) = &self.live {
+            if live.phase == Phase::Starting {
+                return Some(Eligibility::Recording);
+            }
+            let matched = live.matches_meeting(meeting) && !live.known.contains(&meeting.id)
+                || live.session.as_ref().is_some_and(|session| {
+                    session.id == meeting.id
+                        || session.parts.iter().any(|part| part.id == meeting.id)
+                });
+            if matched {
+                if live.needs_save(&self.live_notes.text)
+                    || !live.queued.is_empty()
+                    || matches!(live.saving, Saving::Pending | Saving::Failed(_))
+                    || live.close_failed
+                    || live.recovered.is_some()
+                {
+                    return Some(Eligibility::UnsavedNotes);
+                }
+                return Some(match live.phase {
+                    Phase::Starting | Phase::Recording => Eligibility::Recording,
+                    Phase::Paused => Eligibility::Paused,
+                    Phase::Making => Eligibility::Processing,
+                });
+            }
+        }
+        matches!(
+            read_transcript_state(&meeting.folder),
+            Some(Transcript::Finishing | Transcript::Interrupted)
+        )
+        .then_some(Eligibility::Processing)
+    }
+
     pub fn on_live(&self) -> bool {
         self.live_open
             && self.live.is_some()

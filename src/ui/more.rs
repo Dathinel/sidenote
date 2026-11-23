@@ -48,9 +48,19 @@ impl Part {
 impl State {
     /// A short confirmation near the top of the window. `poll` takes it down after two seconds.
     pub fn show_toast(&mut self, text: impl Into<String>, tx: &mut Tx) {
+        self.show_toast_for(text, TOAST_FOR, tx);
+    }
+
+    pub(super) fn show_toast_for(
+        &mut self,
+        text: impl Into<String>,
+        duration: Duration,
+        tx: &mut Tx,
+    ) {
         self.memory.settle_toast_action = None;
-        self.toast = Some((text.into(), Instant::now() + TOAST_FOR));
-        tx.wake_after(TOAST_FOR + Duration::from_millis(60));
+        self.delete_ui.undo = None;
+        self.toast = Some((text.into(), Instant::now() + duration));
+        tx.wake_after(duration + Duration::from_millis(60));
     }
 
     /// Drops a toast that has run out. True when it did, so the window draws again.
@@ -61,6 +71,7 @@ impl State {
             .is_some_and(|(_, end)| Instant::now() >= *end)
         {
             self.toast = None;
+            self.delete_ui.undo = None;
             return true;
         }
         false
@@ -199,6 +210,11 @@ pub fn menu(s: &State, k: &Kit, m: &Meeting, scope: &str, p: Palette, layer: &mu
                 )
                 .on_press_tx(move |s: &mut State, tx| s.export_meeting(&export_id, tx)),
             );
+        if s.delete_available() {
+            menu = menu
+                .child(menu_separator(p))
+                .child(super::meeting_delete::menu_row(m, &trigger_key, p));
+        }
         if scope == "meeting" {
             menu = super::meeting::reading::menu_items(s, m, menu, p);
         }

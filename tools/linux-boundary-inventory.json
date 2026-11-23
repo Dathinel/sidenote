@@ -431,15 +431,17 @@
 
   "src/ui/idle_cpu/measurement.rs": "e4be960feb8fd3fe5bef8d5d8e3c409aa8cf6e8d8fb77fccc0c4011777af7c2b",
 
-  "src/ui/live.rs": "9204475109d1a84c48739f2412a839612e269b345899cbd2b31daf672bfeab07",
+  "src/ui/live.rs": "3182fb356622eb597eabcfb9ef03875f5d4f66730c6b717fabf6e678c7ba1314",
 
   "src/ui/mcp_connect.rs": "b7372660109d111f146b60c90b4a3387c66b2e9eebdc0332ac2bc07034cbba20",
+
+  "src/ui/meeting_delete.rs": "83c3805e4a21544ab977adb0222df8e0aefb51582a7e0d447890a9008f8f7059",
 
   "src/ui/memory.rs": "7414eb22f15f02acfbd80d3595c000712abe5b8c905832b7daa6777fa6a110e6",
 
   "src/ui/memory/settled.rs": "9d0915dfa235083870103a6872b2fc6e23c267328989d288b2299e1e0e460b58",
 
-  "src/ui/mod.rs": "174148268c480440750649d14a6d748cae1ab44ecdd2c2f3ba816fff477d8565",
+  "src/ui/mod.rs": "f1de47b83200c09161e98a36f41b8b2ee0a06ea4804a9825454da0c226431c7f",
 
   "src/ui/models.rs": "eb6ea41c084af0bdb6ec17cdf7a2fad8e4f812d859351e73b05fac2ccbd703f9",
 

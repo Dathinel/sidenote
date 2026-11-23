@@ -27,6 +27,7 @@ mod list;
 mod live;
 mod mcp_connect;
 mod meeting;
+mod meeting_delete;
 mod memory;
 pub(crate) mod models;
 mod more;
@@ -148,6 +149,10 @@ pub enum Event {
         result: Result<project_merge::Completion, String>,
     },
     Edited(edit_worker::Completion),
+    MeetingRecycle {
+        generation: u64,
+        result: meeting_delete::RecycleResult,
+    },
     Update(sidenote::updates::Status),
     UpdateFinished(Result<sidenote::updates::Status, String>),
     ListenerFinished(Result<(), String>),
@@ -289,6 +294,7 @@ pub struct State {
     pub meeting_tab: meeting::Tab,
     /// The key of the open "..." menu, so only one is ever open.
     pub more_menu: Option<String>,
+    delete_ui: meeting_delete::DeleteUi,
     /// A confirmation such as "Copied summary", and when it goes away.
     pub toast: Option<(String, Instant)>,
     /// The Ctrl+K palette, and what is typed in its box.
@@ -473,7 +479,14 @@ impl State {
         #[cfg(test)]
         crate::test_paths::isolate();
         let settle_recovery_error = core::settle::Store::default().recover().err();
-        let (meetings, scan_errors) = core::scan();
+        let delete_recovery_failed = core::Config::default()
+            .features
+            .enabled(core::Feature::Delete)
+            && meeting_delete::maintain(&core::state_dir()).is_err();
+        let (meetings, mut scan_errors) = core::scan();
+        if delete_recovery_failed {
+            scan_errors.push("Some deleted meetings could not be recovered or cleared.".into());
+        }
         let (events_tx, events_rx) = mpsc::channel();
         let store = StateStore::default();
         let (runners, runner_error) = match ask_runners() {
@@ -540,6 +553,7 @@ impl State {
             transcript_jump: TextEdit::new(""),
             meeting_tab: meeting::Tab::Summary,
             more_menu: None,
+            delete_ui: meeting_delete::DeleteUi::default(),
             toast: None,
             finder: None,
             finder_query: TextEdit::new(""),
@@ -787,6 +801,7 @@ impl State {
 
     /// Back to the home list.
     pub fn go_home(&mut self) {
+        self.leave_delete_view();
         self.notice = None;
         response_time::superseded(std::mem::take(&mut self.annotations.response_time));
         response_time::superseded(std::mem::take(&mut self.tasks_response_time));
@@ -820,6 +835,7 @@ impl State {
     }
 
     pub fn select(&mut self, id: &str, tx: &mut Tx) {
+        self.leave_delete_view();
         let timing = Operation::new(TimedAction::Meeting);
         response_time::superseded(std::mem::take(&mut self.tasks_response_time));
         self.companies.open = false;
@@ -1551,6 +1567,9 @@ impl State {
             }
             Event::MemoryRewritten { id, result } => self.memory_rewritten(&id, result),
             Event::Edited(result) => self.edit_finished(result),
+            Event::MeetingRecycle { generation, result } => {
+                self.recycle_finished(generation, result)
+            }
             Event::Area {
                 generation,
                 refresh,
@@ -1984,6 +2003,7 @@ fn poll(s: &mut State, clock: f64, tx: &mut Tx) -> bool {
         *now = clock;
     }
     let (mut changed, _) = apply_pending(s, headless);
+    changed |= s.apply_recycle_result(tx);
     #[cfg(windows)]
     if window::meeting_icon::poll(s) {
         changed = true;
@@ -2255,6 +2275,9 @@ fn top_bar(s: &State, p: theme::Palette, narrow: bool, layer: &mut Vec<El>) -> E
             .on_press(|s: &mut State| s.toggle_sidebar()),
         );
     }
+    if nav::meetings_home(s) && s.delete_available() {
+        left = left.child(meeting_delete::list_button(p));
+    }
     if s.view == tasks::View::Meetings && s.selected.is_some() {
         let title = s.current().map(|m| m.title.as_str()).unwrap_or_default();
         left = left.child(
@@ -2496,18 +2519,23 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
         app = app.child(finder);
     }
     if let Some((text, _)) = &s.toast {
-        let action = s.memory.settle_toast_action.as_ref().map(|(id, redo)| {
-            let (id, redo) = (id.clone(), *redo);
-            widgets::action(if redo { "Redo" } else { "Undo" }, p)
-                .key("settle-toast-action")
-                .on_press(move |s: &mut State| s.settle_undo(id.clone(), redo))
-        });
+        let action = if let Some(id) = s.delete_ui.undo.as_deref() {
+            Some(meeting_delete::undo_button(s, id, p))
+        } else {
+            s.memory.settle_toast_action.as_ref().map(|(id, redo)| {
+                let (id, redo) = (id.clone(), *redo);
+                widgets::action(if redo { "Redo" } else { "Undo" }, p)
+                    .key("settle-toast-action")
+                    .on_press(move |s: &mut State| s.settle_undo(id.clone(), redo))
+            })
+        };
         app = app.child(if action.is_some() {
             widgets::toast_with_action(text, action, p)
         } else {
             widgets::toast(text, p)
         });
     }
+    meeting_delete::overlay(s, p, &mut layer);
     rune_kit::root(app, layer)
 }
 
