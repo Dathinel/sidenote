@@ -224,7 +224,8 @@ impl Settings {
             .context(Operation("open mode.lock"))?;
         let mut current = Self::load(root).context(Operation("read authority settings.json"))?;
         if !current.enabled {
-            return Err(store_io::invalid("Relay preview was turned off").into());
+            return Err(store_io::invalid("Relay preview was turned off"))
+                .context(Operation("read authority settings.json"));
         }
         let previous_room = current.room.clone();
         current.room = self.room.clone();

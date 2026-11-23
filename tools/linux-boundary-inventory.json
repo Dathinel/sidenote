@@ -267,13 +267,13 @@
 
   "src/core/recording_source/tests.rs": "f599f85ce6e360ba9ee314037e8f7036c9de16939d02cee773662730c9b84f84",
 
-  "src/core/relay_preview.rs": "71e028f0d14b8df40333b2ac5bfbceaf6e7885cfd74a9cf43d34dcb0686881ef",
+  "src/core/relay_preview.rs": "6bd8a988f834b9b6079cc9a88ecdbe27daf08d82389c1361080220e309096458",
 
   "src/core/relay_preview/migration.rs": "e9e0e4c86be43027861825ba387c26ca70a9f8567964de61c9113e2e79a8559f",
 
   "src/core/relay_preview/operations.rs": "9dcd718a190ba735d59805a466b49bce3554661cfe66b6495900db9b10ea29ba",
 
-  "src/core/relay_preview/pairing.rs": "936be0f1d1d986656bf06979a1aa18572877a7de903d4cf8a9cd8115bf98092f",
+  "src/core/relay_preview/pairing.rs": "3a234b69c8441c987a06ce7ff727076f4443f8b25d4006d087480989d36753fb",
 
   "src/core/relay_preview/shared.rs": "373e85ff8212a7cc4477c311aefb04c597837df07b6c9ec996270bda73d80bd8",
 
