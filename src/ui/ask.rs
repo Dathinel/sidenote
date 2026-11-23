@@ -14,7 +14,7 @@ use super::{
 };
 use regex::{Captures, Regex};
 use rune::tok::motion::{GLIDE, GLIDE_EXIT, SNAP, pair};
-use rune::{El, Key, KeyEvent, Spring, SpringPair, Transition, Tx, col, el, row, text};
+use rune::{El, Key, KeyEvent, Spring, SpringPair, Transition, Tx, col, el, row};
 use rune_kit::{Kit, Markdown, MarkdownStyle, Menu, MenuItem, Placement, Spinner, TextInput};
 use sidenote::core::{self, Meeting, Message, ask::SUGGESTIONS, ask_all};
 use std::sync::LazyLock;
