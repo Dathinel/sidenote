@@ -127,7 +127,7 @@
   "src/core/people.rs": "8ac2f1d902ee71a380d1473de1b5d1c91a56415db2d478af0dac8af270cdfc6a",
   "src/core/project_merge.rs": "a0ed36a42eda784e254d694ea97184c35d3054a6656a4e06cd828026be09fc93",
   "src/core/provider.rs": "ee1f5a201fca2aa9447752430902577d40e8545a7a7c0139c2dcda60a637450f",
-  "src/core/recording_guard.rs": "ff6428457747bf9a6813f495b76f59908ac7d56fbb22c9df9db223cda2e1e2fd",
+  "src/core/recording_guard.rs": "4f6e51ee7112f28bfe9aa8c4d8ecb9c7c2275fd43d77efdc1b4463274c31c988",
   "src/core/recording_source.rs": "8537c65ac9cf28b0bbfc7aff8eeb0e4989d8a14d2110f395269a7500cac00ac4",
   "src/core/recording_source/events.rs": "7a3609533aaf2963f70c5b3ef38719900ab37ac8e7a24ae8ee61c354af23eea7",
   "src/core/recording_source/events/tests.rs": "af49988deb7d2b694e2e6e86e0a26b3db17b043ebaa82dbe5171d46390a17772",

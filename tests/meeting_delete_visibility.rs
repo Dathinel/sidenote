@@ -77,7 +77,12 @@ fn catalog_omits_deleted_aggregate_parts_and_late_peers() {
             )
             .unwrap()
     };
+    let citation = format!("[[{part}@00:01]]");
+    let source_visible =
+        || sidenote::core::recording_guard::sources_visible(&state, &source, [citation.as_str()]);
+    assert!(source_visible());
     let first = recycle();
+    assert!(!source_visible());
     assert!(retained.join("manifest.json").exists());
     assert!(sidenote::core::live::write_notes(&retained, "synthetic late save").is_err());
     assert_eq!(
@@ -98,6 +103,7 @@ fn catalog_omits_deleted_aggregate_parts_and_late_peers() {
     omitted();
     let deleted_generation = mutation_generation();
     store.restore(&first).unwrap();
+    assert!(source_visible());
     assert_eq!(mutation_generation(), deleted_generation + 1);
     assert!(recent().is_some());
     assert!(agent_tools::call("get_meeting", json!({"id":id})).is_ok());
