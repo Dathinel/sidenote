@@ -184,6 +184,7 @@ impl Drop for Temp {
 pub enum WriteStage {
     Flush,
     Replace,
+    Published,
 }
 
 #[cfg(windows)]
@@ -241,7 +242,8 @@ pub(super) fn atomic_write_checked(
         .path
         .join(path.file_name().ok_or_else(|| invalid("Missing name"))?);
     check(WriteStage::Replace)?;
-    crate::platform::replace_file(&temp.path, &target)
+    crate::platform::replace_file(&temp.path, &target)?;
+    check(WriteStage::Published)
 }
 
 /// Stable FNV-1a over length-delimited UTF-8 parts, independent of Rust's default hasher.

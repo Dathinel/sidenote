@@ -152,7 +152,7 @@
   "src/core/speech_jobs/runner.rs": "7d876eb5ed481838ec6e21c853da7c45cecb950f76d3bd1c01aa6ef1842df4a4",
   "src/core/speech_jobs/runner/tests.rs": "dd63909833e57bc016059631633df623291b7357fec6ecc191c0e123e8ee8736",
   "src/core/speech_sessions.rs": "1f5c67688e5b2cb8c74635fa4aaec423857bdcfde27129996cc8404689d8cebb",
-  "src/core/store_io.rs": "8627bc8c5452fe48ce543833f224e493682e62814adc871c3eef6bc0f20b7767",
+  "src/core/store_io.rs": "82933d872f6a8d27a0e27c22ed9430a23a586b4ee68944b1cfb1bca30c89431c",
   "src/core/sync_state.rs": "5ed66965cebe7578baf77900557839707064f555a026b9de218895634083f664",
   "src/core/tasks.rs": "0071ad0533947f13a2e69faedad2286213197648c5db7fc4540725f7c7b78dec",
   "src/core/tasks_board.rs": "cccde82971ca59d1dff190d674b648c9cf80970beda6121092cf2a633fecf58b",
