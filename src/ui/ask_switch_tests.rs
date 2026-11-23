@@ -1226,7 +1226,10 @@ fn deletion_discards_streamed_text_even_after_the_user_pressed_stop() {
     }
     use sidenote::core::meeting_delete::{Eligibility, Storage, read_visibility};
 
-    let mut rt = page();
+    let mut rt = page_with(DEFAULT_SIZE, || {
+        let manifest = core::meetings_dir().join(MEETING).join("manifest.json");
+        std::fs::write(manifest, br#"{"status":"complete"}"#).unwrap();
+    });
     start_stop_fixture(&mut rt);
     let run = rt.state.asks.get_mut(MEETING).unwrap();
     run.live = true;
