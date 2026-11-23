@@ -130,10 +130,8 @@ fn recording_pause_preserves_the_owned_attempt_and_retries() {
         store_io::write(&folder.join("manifest.json"), &serde_json::json!({"status":"complete","created_at_ms":1000,"ended_at_ms":31000,"duration_ms":30000,"system":{"first_arrival_us":0}})).unwrap();
         fs::write(folder.join("transcript.ndjson"), serde_json::json!({"start_ms":0,"end_ms":1000,"source":"system","text":vec!["synthetic";25].join(" ")}).to_string()).unwrap();
         asr::write_wav(&folder.join("system.wav"), &[0.0; 16000]).unwrap();
-        let mut config = core::Config {
-            notes: Some(Default::default()),
-            ..Default::default()
-        };
+        let mut config = core::Config::default();
+        config.notes = Some(Default::default());
         config.pipeline.profile = "experimental".into();
         config.labs.after_stop_language_routing = true;
         config.features.indic_engine = true;
