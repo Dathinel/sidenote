@@ -124,10 +124,11 @@ Push-Location relay
 try { bun install --frozen-lockfile } finally { Pop-Location }
 ```
 
-`tools/prove_linux_boundaries.py` keeps a reviewed list of source files that start
-processes or read files (`tools/linux-boundary-inventory.json`). If it reports a stale
-inventory, list the process and file-read calls you added or changed in your pull
-request; a maintainer reviews them and updates the inventory.
+After changing an inventoried file, run
+`python -I tools/prove_linux_boundaries.py . --update` to regenerate the reviewed
+whole-file hashes. Always use this command to update
+`tools/linux-boundary-inventory.json` and preserve its layout. List any process
+and file-read calls you added, changed, or removed in your pull request for review.
 
 If you change `relay/` (with Bun 1.4.4):
 

@@ -141,7 +141,7 @@ pub(super) fn providers(s: &State, k: &Kit, st: &Setting, p: Palette, layer: &mu
         .current(current)
         .placeholder("Unrecognized policy")
         .appearance(SelectAppearance::Field)
-        .width(220.0)
+        .width(settings::short_select_width(s, 220.0))
         .disabled(!can)
         .open(open && can)
         .on_toggle(move |s: &mut State| {
@@ -165,7 +165,10 @@ pub(super) fn providers(s: &State, k: &Kit, st: &Setting, p: Palette, layer: &mu
                 s.hex_choose(&setting_key, &value.to_string());
             }
         })
-        .build(k, layer);
+        .build(&settings::row_field_kit(k, p), layer);
+        if index > 0 {
+            body = body.child(crate::ui::cards::settings_divider(p));
+        }
         body=body.child(settings::setting_row(s,&key,label,if current.is_some() { "When Hex detects a call in this app." } else { "This policy cannot be edited here. Review it in Hex. Other app choices are preserved." },control,false,p));
     }
     if let Some(error) = s.hex.row_errors.get(&st.key) {

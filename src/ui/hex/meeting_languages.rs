@@ -26,7 +26,7 @@ pub(super) fn section(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El
         .label("Language handling")
         .current(Some(options[current].as_str()))
         .appearance(SelectAppearance::Field)
-        .width(280.0)
+        .width(super::settings::short_select_width(s, 280.0))
         .open(s.hex.select_open.as_deref() == Some("meeting-language-mode"))
         .on_toggle(|s: &mut State| {
             s.hex.select_open = if s.hex.select_open.is_some() {
@@ -67,7 +67,7 @@ pub(super) fn section(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El
             }
             s.hex.select_open = None;
         })
-        .build(k, layer);
+        .build(&super::settings::row_field_kit(k, p), layer);
     let mut body = super::settings::setting_row(
         s,
         "meeting-language-mode",

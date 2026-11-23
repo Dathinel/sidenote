@@ -1,6 +1,6 @@
 //! Settings layout and destinations. Hex keys are routed, never renamed or migrated.
 use super::*;
-use crate::ui::{ai_notes, icons, nav, tasks, widgets::ButtonDisabled};
+use crate::ui::{ai_notes, cards, icons, nav, tasks, widgets::ButtonDisabled};
 use sidenote::core::{Feature as AppFeature, UiPrefs};
 use std::collections::BTreeMap;
 
@@ -399,6 +399,39 @@ pub(crate) fn group_highlight(s: &State, key: &str, p: Palette) -> Color {
     }
 }
 pub(crate) use crate::ui::cards::{icon_tile, panel};
+
+pub(super) fn compact_rows(s: &State) -> bool {
+    !matches!(active(s).0, Page::General | Page::Appearance)
+}
+
+pub(crate) fn row_field_kit(k: &Kit, p: Palette) -> Kit {
+    let mut kit = k.clone();
+    kit.radius.md = 7.0;
+    kit.ty.ui_compact = roles::CONTROL.style();
+    kit.c.text_base = p.ink;
+    kit.c.icon_muted = p.faint;
+    kit.glyph.chevron_down = &icons::SELECT_DOWN;
+    kit.glyph.chevron_up = &icons::SELECT_UP;
+    kit
+}
+
+pub(crate) fn short_select_width(s: &State, wide: f32) -> f32 {
+    let width = s.app_w.get();
+    if width < DRAWER_AT {
+        wide.min((width - 240.0).clamp(120.0, 152.0))
+    } else {
+        wide
+    }
+}
+
+pub(crate) fn row_control(s: &State, control: El) -> El {
+    if s.app_w.get() < DRAWER_AT {
+        control.max_w((s.app_w.get() - 64.0).max(0.0))
+    } else {
+        control
+    }
+}
+
 fn ownership_text(page: Page) -> &'static str {
     if page == Page::Hex {
         "These settings live in Hex and also change Hex."
@@ -498,6 +531,16 @@ pub(crate) fn setting_row(
     _local: bool,
     p: Palette,
 ) -> El {
+    if compact_rows(s) {
+        let copy = cards::settings_copy(name, p)
+            .children((!help.is_empty()).then(|| roles::META.wrap(help, p.soft)));
+        return cards::settings_row(!help.is_empty())
+            .key(key)
+            .fill(group_highlight(s, key, p))
+            .child(cards::settings_tile(row_icon(key), p))
+            .child(copy)
+            .child(row_control(s, control));
+    }
     let title = roles::NAME.wrap(name, p.ink);
     crate::ui::cards::row_shell()
         .key(key)
@@ -1569,20 +1612,22 @@ fn hex_rows(
         "labs.live_captions" => 5,
         _ => 6,
     });
-    let mut body = col().w_full();
-    if items.iter().any(|st| {
+    let compact = compact_rows(s);
+    let mut has_row = items.iter().any(|st| {
         matches!(
             st.key.as_str(),
             "meetings.audio_retention" | "labs.expire_meeting_audio"
         )
-    }) {
+    });
+    let mut body = col().w_full();
+    if has_row {
         body = body
             .child(
                 keep_audio_row(s, k, p, layer)
                     .key("keep-audio")
                     .fill(highlight(s, "keep-audio", p)),
             )
-            .child(hairline(p));
+            .children((!compact).then(|| hairline(p)));
     }
     for st in items {
         if matches!(
@@ -1591,8 +1636,11 @@ fn hex_rows(
         ) {
             continue;
         }
-        let r = super::setting_row(s, k, st, place(st), p, layer);
-        body = body.child(r).child(hairline(p));
+        body = body
+            .children((compact && has_row).then(|| cards::settings_divider(p)))
+            .child(super::setting_row(s, k, st, place(st), p, layer))
+            .children((!compact).then(|| hairline(p)));
+        has_row = true;
     }
     body
 }
@@ -1634,7 +1682,7 @@ fn labs(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
         .label("Stop after no speech for")
         .current(Some(current.as_str()))
         .appearance(SelectAppearance::Field)
-        .width(180.0)
+        .width(short_select_width(s, 180.0))
         .open(s.hex.select_open.as_deref() == Some("labs-silence-minutes"))
         .on_toggle(|s: &mut State| {
             s.hex.select_open = if s.hex.select_open.is_some() {
@@ -1655,28 +1703,28 @@ fn labs(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
             save_labs(s, |labs| labs.silence_minutes = minutes);
             s.hex.select_open = None;
         })
-        .build(k, layer);
+        .build(&row_field_kit(k, p), layer);
     settings_card("Labs", col().w_full()
         .child(setting_row(s, "labs-language-detection", "Language detection (experimental)",
             "Enable the standalone prepared-audio language stage. Writes advisory guesses only; transcription stays unchanged. Confidence thresholds are uncalibrated.",
             Switch::new(s.config.labs.language_detection)
                 .label("Language detection (experimental)").hide_label()
                 .on_toggle(|s: &mut State| save_labs(s, |labs| labs.language_detection = !labs.language_detection)).build(k).key("labs-language-detection-toggle"), true, p))
-        .child(hairline(p))
+        .child(cards::settings_divider(p))
         .child(setting_row(s, "labs-stop-forgotten", "Stop forgotten recordings",
             &format!("If a recording hears no speech for {minutes} minutes, Sidenote stops it so it doesn't run for hours."),
             Switch::new(s.config.labs.stop_forgotten_recordings)
                 .label("Stop forgotten recordings").hide_label()
                 .on_toggle(|s: &mut State| save_labs(s, |labs| labs.stop_forgotten_recordings = !labs.stop_forgotten_recordings)).build(k).key("labs-stop-forgotten-toggle"), true, p))
-        .child(hairline(p))
+        .child(cards::settings_divider(p))
         .child(setting_row(s, "labs-silence-duration", "Stop after no speech for", "Choose 10, 20, 30 or 60 minutes.", duration, false, p))
-        .child(hairline(p))
+        .child(cards::settings_divider(p))
         .child(setting_row(s, "labs-measure-files", "Measure recording files (diagnostics)",
             "Save file sizes, WAV header details and transcript line counts during recordings. No audio or text is saved.",
             Switch::new(s.config.labs.measure_recording_files)
                 .label("Measure recording files (diagnostics)").hide_label()
                 .on_toggle(|s: &mut State| save_labs(s, |labs| labs.measure_recording_files = !labs.measure_recording_files)).build(k).key("labs-measure-files-toggle"), true, p))
-        .child(hairline(p))
+        .child(cards::settings_divider(p))
         .child(setting_row(s, "labs-process-windows", "Process meetings in 5-minute windows (test)",
             "Test calls only. Runs Telugu and Hindi models while recording and saves audio windows, results and timings in Sidenote. May slow live transcription. Your meeting notes stay as they are.",
             Switch::new(s.config.labs.process_meeting_windows)
@@ -1732,10 +1780,11 @@ fn devices(s: &State, k: &Kit, p: Palette) -> El {
         "This device's name",
         help,
         TextInput::new(&s.hex.shell.device_name)
+            .height(30.0)
             .label("This device's name")
             .on_edit(|s: &mut State| &mut s.hex.shell.device_name)
             .on_submit(|s: &mut State, _| save_device_name(s))
-            .build(k)
+            .build(&row_field_kit(k, p))
             .key("device-name-input")
             .w(220.0),
         false,
@@ -1759,7 +1808,7 @@ fn devices(s: &State, k: &Kit, p: Palette) -> El {
         }
     }
     for (device, (count, last)) in peers {
-        out = out.child(hairline(p)).child(setting_row(
+        out = out.child(cards::settings_divider(p)).child(setting_row(
             s,
             &format!("sync-device-{device}"),
             device,
@@ -1769,7 +1818,7 @@ fn devices(s: &State, k: &Kit, p: Palette) -> El {
             p,
         ));
     }
-    out.child(hairline(p)).child(
+    out.child(cards::settings_divider(p)).child(
         roles::SMALL
             .wrap(
                 "Folder sync lists the meetings each device recorded. It does not show whether a device is online.",
@@ -1832,6 +1881,7 @@ fn relay_address(s: &State, k: &Kit, p: Palette) -> El {
         "Relay address",
         "Your relay's address, like wss://relay.example.com. Press Enter to save.",
         TextInput::new(&s.hex.shell.relay_address)
+            .height(30.0)
             .label("Relay address")
             .placeholder("wss://relay.example.com")
             .on_edit(|s: &mut State| &mut s.hex.shell.relay_address)
@@ -1854,7 +1904,7 @@ fn relay_address(s: &State, k: &Kit, p: Palette) -> El {
                     }
                 }
             })
-            .build(k)
+            .build(&row_field_kit(k, p))
             .key("relay-address-input")
             .w(300.0),
         false,
@@ -1923,6 +1973,8 @@ fn vocabulary(s: &State, k: &Kit, p: Palette) -> El {
             "Names and terms",
             "Hex and Sidenote spell these right in transcripts and summaries.",
             crate::ui::widgets::action("Edit terms", p)
+                .px(10.0)
+                .radius(7.0)
                 .key("vocabulary-edit")
                 .on_press(|s: &mut State| {
                     if !s.hex.open_groups.remove("vocabulary-edit") {
@@ -1940,18 +1992,20 @@ fn vocabulary(s: &State, k: &Kit, p: Palette) -> El {
 fn sync_page(s: &State, k: &Kit, p: Palette) -> El {
     let devices = col().w_full().child(settings_card(
         "Devices",
-        devices(s, k, p).child(hairline(p)).child(feature(
-            s,
-            k,
-            AppFeature::OtherDevices,
-            "Other devices",
-            &match s.nav.peers {
-                0 => "Show meetings recorded on your other devices.".into(),
-                1 => "1 meeting from another device.".into(),
-                n => format!("{n} meetings from other devices."),
-            },
-            p,
-        )),
+        devices(s, k, p)
+            .child(cards::settings_divider(p))
+            .child(feature(
+                s,
+                k,
+                AppFeature::OtherDevices,
+                "Other devices",
+                &match s.nav.peers {
+                    0 => "Show meetings recorded on your other devices.".into(),
+                    1 => "1 meeting from another device.".into(),
+                    n => format!("{n} meetings from other devices."),
+                },
+                p,
+            )),
         p,
     ));
     if s.hex.shell.relay.enabled {
@@ -1988,6 +2042,7 @@ fn hex_group(index: usize, body: El) -> El {
 }
 fn hex_group_rows(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, group: usize) -> El {
     let mut body = col().w_full();
+    let mut has_row = false;
     for st in &s.hex.settings {
         if readable::windows_only_hidden(st) || location(st).0 != Page::Hex {
             continue;
@@ -2003,8 +2058,9 @@ fn hex_group_rows(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, group: us
         };
         if index == group {
             body = body
-                .child(super::setting_row(s, k, st, place(st), p, layer))
-                .child(hairline(p));
+                .children(has_row.then(|| cards::settings_divider(p)))
+                .child(super::setting_row(s, k, st, place(st), p, layer));
+            has_row = true;
         }
     }
     body
@@ -2066,7 +2122,7 @@ fn labs_group(s: &State, p: Palette) -> El {
         let mut rows = col().w_full();
         for (index, (id, _, _)) in members.iter().enumerate() {
             if index != 0 {
-                rows = rows.child(hairline(p));
+                rows = rows.child(cards::settings_divider(p));
             }
             rows = rows.child(lab_row(s, snapshot, id, p));
         }
@@ -2112,12 +2168,15 @@ fn lab_row(s: &State, snapshot: &sidenote::hex_labs::Snapshot, id: &str, p: Pale
     if snapshot.can_enable(id) {
         let id = id.to_owned();
         controls = controls.child(
-            crate::ui::widgets::button("Turn on", "", crate::ui::widgets::ButtonRole::Primary, p)
-                .h(28.0)
-                .key(format!("hex-lab-enable-{id}"))
-                .label(format!("Turn on {name}"))
-                .button_disabled(s.hex.shell.labs_loading)
-                .on_press(move |s: &mut State| s.hex.shell.lab_confirm = Some(id.clone())),
+            crate::ui::widgets::row_button(
+                "Turn on",
+                &format!("hex-lab-enable-{id}"),
+                crate::ui::widgets::ButtonRole::Primary,
+                p,
+            )
+            .label(format!("Turn on {name}"))
+            .button_disabled(s.hex.shell.labs_loading)
+            .on_press(move |s: &mut State| s.hex.shell.lab_confirm = Some(id.clone())),
         );
     }
     let mut out = col().w_full().child(setting_row(
@@ -2203,10 +2262,10 @@ fn hex_summaries(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
     );
     if open {
         let mut rows = col().w_full();
-        for st in settings {
+        for (index, st) in settings.into_iter().enumerate() {
             rows = rows
-                .child(super::setting_row(s, k, st, place(st), p, layer))
-                .child(hairline(p));
+                .children((index > 0).then(|| cards::settings_divider(p)))
+                .child(super::setting_row(s, k, st, place(st), p, layer));
         }
         out = out.child(settings_card("Hex · Separate summary engine", rows, p));
     }
@@ -2350,10 +2409,11 @@ fn knowledge_base(s: &State, k: &Kit, p: Palette) -> El {
                 .build(k)
         } else {
             TextInput::new(&s.hex.shell.kb_fields[index])
+                .height(30.0)
                 .label(label)
                 .placeholder(if index == 1 { "origin/main" } else { "" })
                 .on_edit(move |s: &mut State| &mut s.hex.shell.kb_fields[index])
-                .build(k)
+                .build(&row_field_kit(k, p))
         };
         body = body.child(
             col()

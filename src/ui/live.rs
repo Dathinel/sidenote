@@ -134,7 +134,9 @@ impl Transcript {
             Self::Interrupted => {
                 Some("Hex was restarted. It will finish this transcript when it starts again.")
             }
-            Self::Ready => Some("The summary opens here when it is ready. You can leave this page."),
+            Self::Ready => {
+                Some("The summary opens here when it is ready. You can leave this page.")
+            }
         }
     }
 }

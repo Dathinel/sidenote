@@ -1,231 +1,459 @@
 {
   "crates/sidenote-sync/examples/linux_notes_root.rs": "43609a6e9bea12083a12fd1af239cc45205c89147ec8ba1787f875e23902f738",
+
   "crates/sidenote-sync/examples/linux_platform_proof.rs": "0e4ac3c683d5b431e35c3b5615969b843670656ca37d104117e263603bbc5771",
+
   "crates/sidenote-sync/examples/local_e2e.rs": "b4568096ac1d5a4a8424f4e01d136212fcd58f77abd2594af5c5125c06545527",
+
   "crates/sidenote-sync/src/client.rs": "daa40e3b2001783d2c692379549c06ece9321ff507deab78d160a56f27d92d24",
+
   "crates/sidenote-sync/src/containment.rs": "09d4f871114f3972b91914f32578df22f46fa0cdd4efdd25f1e79052932527c5",
+
   "crates/sidenote-sync/src/linux_secret.rs": "31c0168b38b8fe175c33b8dc74a84a6e98428518a13e42801148f3259bd1639c",
+
   "crates/sidenote-sync/src/notes_cgroup.rs": "99446f7bca46b9a31a1cec1b7aa5afbc1b23c3ff79608ca0fdc52b177dc008c9",
+
   "crates/sidenote-sync/src/notes_supervisor.rs": "1d8676b4e06b05aaba83c2a64871d67f161d1717f19df19f3a7d00c0daac7edb",
+
   "crates/sidenote-sync/src/pairing.rs": "3c293e35bd29373eaece91fdc5ca7a0423c8fa896390ee5747cbd07fb0de97f3",
+
   "crates/sidenote-sync/src/pid_worker.rs": "a3453a6798b12d4801506a876a23d9862e52399b17a0afd55d2dfe5fa5899a8d",
+
   "crates/sidenote-sync/src/tree_worker.rs": "e8500a2ca637b129caf9dd8f6ea7bd607792ab260d8695d9bac16ed1199762d7",
+
   "crates/sidenote-sync/src/windows_launch.rs": "2e435b57c7c43749f62b03f53c5c4e969065ca4ac9f30b451ca0e3aff407059c",
+
   "crates/sidenote-sync/src/worker.rs": "07e7072c03a1a4c9c90698807c80e9ee862821ec805e4d6e75d0ea3bba29cc92",
+
   "crates/sidenote-sync/tests/linux_speech_service.rs": "c6f7f1ae84e28d983701ad554f10e199aa7cd30ef0998ff7f5d447fb9baa1191",
+
   "crates/sidenote-sync/tests/round1_store.rs": "e1072d697e506f6ee4cba7d5bde4dbe4175788caafb02dee27a9d64a120b511e",
+
   "crates/sidenote-sync/tests/store_model.rs": "5e504dfdec143eba3c6e054c28bc713b98f04a8dd3d9fd0f92ec95311210ecb1",
+
   "src/core/agent_instructions.rs": "2da01ab289ae7e71c62edeade7c815e5b9685b3f0f53331c02a6855d4b1f97fe",
+
   "src/core/annotations/generation.rs": "6df3a5b2f6edc7e5a7d35c39458c5e099b8dba53a0681fb1819c153431cfc974",
+
   "src/core/annotations/media.rs": "50f497f4c6d6e9666e3aa832ff151c02d3b95596a8e978e9324dddb8e1e55cfa",
+
   "src/core/annotations/mod.rs": "a65864b66854289be199d770f313a8e53611eb9d3eb80d040a3aa1815416d389",
+
   "src/core/annotations/note.rs": "fd948e045a966d55b23c427f6e63181935d5caefde9a4080ce792b0b55899ff3",
+
   "src/core/annotations/notebook.rs": "ba4c310b2cd034a77111586d36e39c3adab2430442f665bedd709a51b2a7cf23",
+
   "src/core/annotations/notebook_tests.rs": "4c93c1e1b5e730b7f1a70722f1554142b5c1a2ca6a510468b0168684103460fc",
+
   "src/core/annotations/share.rs": "f2fb84ec62413ca2c3994e410a0186366ecd91934aded9dd1791579b9cc68307",
+
   "src/core/annotations/tests.rs": "24896c5559e58b408557651c2e13d091a2dd869bd4c523eb3112dd88b2731f01",
+
   "src/core/area_ops.rs": "7e9116623a9e190a24827f7d1b5be4480ada18959e22ff84c4df9bee087c314d",
+
   "src/core/area_version.rs": "d27496555252a7d5555056b54a9482bf81a7adadb30ec845a1af67bb32dbeb49",
+
   "src/core/areas.rs": "ab1f0561d47fcd61314452fec93531912e03fb52d303a4c7ea0c75e2e27df970",
+
   "src/core/ask.rs": "da3e7b6b8031382d303debfff129d2f8ee884645dfe9ce13da14e105e8a3aa51",
+
   "src/core/ask_all.rs": "a7d8a969cc7a512e1c890ff4ccc68bf8f4090475fdcc92c161e9cc9373388c24",
+
   "src/core/ask_options.rs": "80c7a1acd17b37d681638e55f4864fa3d990a0231fd1db035a0a7758760c3416",
+
   "src/core/ask_session.rs": "7989ccaf37f3ff990f472e5a069401dd85b7035fc3ae45e2023d699c4f242d10",
+
   "src/core/asr/onnx.rs": "98304598e7213b686aab1ec30cac0fa23256f13a7a3e2f425caf0eaa98b15f25",
+
   "src/core/asr/onnx/indic_tests.rs": "1abdc8129b50822b0961343207b2c1832245f0071520ddbc8f276cd1bed71577",
+
   "src/core/asr/onnx/linux_tests.rs": "bba78f4fb064acee67dfa5182d742de92db18d64a33ca05f42ad5d74c5bf3f72",
+
   "src/core/background_tests.rs": "6d9d5d6f0877335fe79d31b03ee5ac6ab64effe6669b87361f6df9cb9271a937",
+
   "src/core/check_v2.rs": "6b532606ea2645a3213c63abe858039095ec03a2dc33f807519855efe391a14f",
+
   "src/core/companies.rs": "95a3cb0629a7a9c2706124dc8f79d2d4d377f3810b312beb59122b19d4ed38e6",
+
   "src/core/companies_tests.rs": "03038381f33d5ca95247c95945096f6edac31857fdb90ebfaf345601b2a52f56",
+
   "src/core/config.rs": "9dbbaf074fd29f15e96e896acd4850a7c479b9811f3ead2485bde4997a474387",
+
   "src/core/daily_check.rs": "a23f26f0296493c7a3f8ee731dc0f8a032cd3a237f84ad947c4c61f9d1be6a69",
+
   "src/core/device.rs": "1b5427307e25c2de17c71a124179d896bc7dd841af00c2a58a0db8282c33ca01",
+
   "src/core/engine_settings/persistence.rs": "3b36bbced82d08e9904111de7efd62911db389a92a56014d8bfbe701e55bd070",
+
   "src/core/engine_settings/recovery_tests.rs": "be18687512b0b14d50c39724aaab18daecf4bf9d574d65d1ce1decd7d59baf2e",
+
   "src/core/file_reads.rs": "3a433525e15238013bc442aa8d4350a709e202b6549dffbc7dab0d218455267b",
+
   "src/core/growing_wav.rs": "64dbfe86d85f51b60b7ec8718377da5495f495ed9fa603ce9c40aa02932dc7a2",
+
   "src/core/lid/anuvani.rs": "6cf8e5473868131101b169ae4e08c730343a09418c08fc08b40fb28aa73a2ef1",
+
   "src/core/lid/cli.rs": "ed5484304331faa270a49d732992ef4d09cd3e45dba5e273b231d725f5dbb661",
+
   "src/core/lid/linux_tests.rs": "37659448fc10bc1a34bf8aa524fdaafb8311889a4335d6bb3124c339a5362b24",
+
   "src/core/lid/stage.rs": "248082c031f5da02d0bc1e7e99f59c392a679e8b8dd63090f783bd2b3863547b",
+
   "src/core/lid/tests.rs": "03dcfcbff5826b63dee49ca42752dace0c777eec8d59045eff8984d08a6202e3",
+
   "src/core/lid/worker.rs": "430c99f9fbad3526004c6dc58dd6e599654f59fdc47a44f8121d4aa31d8d867e",
+
   "src/core/live.rs": "09c4776aac19a2e85c95c5f6d00983de3067a7d013adc20e17f09a912f22b480",
+
   "src/core/live_edit.rs": "c54f9c6c5cec7987e2e17116c5487179326457bc637bc422d4417c3e7c05ea36",
+
   "src/core/mcp_connect.rs": "751a61735a486de995d83c35a379df25f52117f2c1f0511b493242fc5bfae9ef",
+
   "src/core/mcp_connect/isolated_tests.rs": "5cfa80ba44ac60c9df438f5318291637c27b669845fcaecb0852ccda7ec45745",
+
   "src/core/mcp_connect/json_config.rs": "a5597e62557288a1ffdc8a5cf00a3caefbe3b905a0a63e733fe4c9d1df5e8fac",
+
   "src/core/meeting_evidence.rs": "2088c8e2170b2e0de82f1a37c55470785631b408e111b54f24e843b197c9cda8",
+
   "src/core/meeting_evidence/speech_host_tests.rs": "e9c6c885ffae4026ea94bfc8bebc158258a2e31d729e0196108c9554655feba5",
+
   "src/core/meeting_job.rs": "5c3051f8f4e0873415705505823b6dcff3a15360b74889ec50c2612ee89ffe05",
+
   "src/core/meeting_job/checkpoint.rs": "6c21475b0a2c6400906e8fd03d6deed17224af530dd3079cf6ffa7d870cb86c6",
+
   "src/core/meeting_job/checkpoint/tests.rs": "897842550f58e485517b0025361589160f4a1c8c125635532853d3dd9d06a1b7",
+
   "src/core/meeting_parts.rs": "9060cdf632f669ed6156aa23c8ae7e2169d2892dc99b2d51c9fef0858c0b1884",
+
   "src/core/meeting_parts_input.rs": "37c54e4872efef2fe5daef820c610b6e67cc6bec869a44cc30113d1c3a839467",
+
   "src/core/meeting_router/batches.rs": "5a3dd1bc1ceb86b607122f628f3fd860738142440b85c28e57a482810694aa62",
+
   "src/core/meeting_router/batches/linux_worker.rs": "1a1dbd683254745f6e397a996354a412875c985e8a4c1325dc440c000ab5a808",
+
   "src/core/meeting_router/batches/linux_worker_tests.rs": "b844f337e5b561188cd282777f37a442ea93ff89807b8e836de5d28602f018d8",
+
   "src/core/meeting_router/batches/worker.rs": "f29a54eb42367bb608957eceaebd92d1120a4074a4bd5792d3b10c692674d726",
+
   "src/core/meeting_router/batches/worker/lifetime_tests.rs": "c927b6dd91599e016eff79bcad7fcfc57ffce673836ec027c251612f2f3dd15c",
+
   "src/core/meeting_router/batches/worker/tests.rs": "cdb613970ca7581cad9798d4328e9bf917e89dc7e2e0a40e4cd9104248c2476c",
+
   "src/core/meeting_router/cache.rs": "6e2137b05436cfc8f5fcfd4f5971222e2bcadad091a8681d98b809db780d6cb1",
+
   "src/core/meeting_router/cli.rs": "ac5e4085ad274886764ee0dc93fbaf6301a907e4ab046e8c7822626f71f24d63",
+
   "src/core/meeting_router/hex.rs": "dd82f71c792abbff3c915069a32082ba38f3a991d77dd5bd498662e7020e5736",
+
   "src/core/meeting_router/hex_bridge.rs": "c135c999e6950c7927d1193f35600027fdf122c11387c12ee8621a7cca92b5c0",
+
   "src/core/meeting_router/hex_http.rs": "f2ef2aa0d96234e1dad25847d7a9b07bbeb31d00f10f878b3a9fa735f854acaa",
+
   "src/core/meeting_router/hex_http/status_tests.rs": "9074f73f8507582b7073deca02bcf20d12a2562262d3949bb99df0c81d6bdade",
+
   "src/core/meeting_router/inputs.rs": "408230fb4accf7e5e6e5e58809238c64daf6051a3862d85cc3805066a18191df",
+
   "src/core/meeting_router/jobs.rs": "286700f49ff4e041a4c83074dc7069747ffc048e343cba351915a8d0b99b2bb3",
+
   "src/core/meeting_router/jobs/handoff.rs": "7a82e947294aeba570433d9425bf892da2f6bc98324e02eff0cd06aa31bfd798",
+
   "src/core/meeting_router/jobs/handoff/tests.rs": "af71b113d9b283f6168da8924e0f6f5e9a4aee0ea0dfcebde48e4bbdb6166106",
+
   "src/core/meeting_router/jobs/notes.rs": "779fc898d0a0b2ff1c3efa852e941962e1be98012242351e16aaed35c7f6f622",
+
   "src/core/meeting_router/jobs/r1_tests.rs": "0e969e51454c8607c07b3839ff4ff547522aa1b3d1e31f7f5ac4766e72e5be33",
+
   "src/core/meeting_router/pieces.rs": "2a1b3919d047b09f87307726d029d9189b875a519c223911eb8312849018a8b8",
+
   "src/core/meeting_router/production.rs": "e2ec35ef7a0dcc82c71ebd4ebf3c5e85329748815d1891f648314825232dd2eb",
+
   "src/core/meeting_router/production/english_http.rs": "08601dc8a59623f239811dc925d2b0dffcd3600948709238a73d164ebb540308",
+
   "src/core/meeting_router/production/fixture_tools.rs": "ff16c1082f483bcacc507a42ae0cbb858dfebd346b0851c2ff7b16af92f05974",
+
   "src/core/meeting_router/production/http_tests.rs": "8c2ec06ac5def6f5cedfa1079441ad488af92aed81cdf496ea63cd0abb7152bc",
+
   "src/core/meeting_router/production/no_speech_tests.rs": "1acc4297c12f65c3c02005391ea79123f6a36a3c197a7ac301c3930fd87a3c6e",
+
   "src/core/meeting_router/production/pipeline.rs": "7660fc96d2dc97a8afd9bd6b20df00779137fd8a41f2ebc59d3b78ec560404a6",
+
   "src/core/meeting_router/production/plan.rs": "891ba254a37cca5293112d03ae0c0b33e28a74df653fb56cfcfe52d380d25d07",
+
   "src/core/meeting_router/production/probe_tests.rs": "c3a084596dda238b60296414807c19a9db3dbcdef430a57e019183fd3a84a927",
+
   "src/core/meeting_router/production/regression.rs": "c80d525d5ca94f634a19930f36e7850724d582310710ebfb21e3aea1febe652f",
+
   "src/core/meeting_router/revision.rs": "24d98e49dd3415857465b35b18f5c41725a9f533bf6710a848bd4461c379f965",
+
   "src/core/meeting_router/revision/captured_tests.rs": "11774bc5fe11975dc15d54182b87bfd44eae11cb42e0edb9e95bce87f62f5f28",
+
   "src/core/meeting_router/revision/gaps.rs": "6737e1ebb191a1eab21bd2d72df2475675294fd7d6f8fc8f895fb0d7e579abe1",
+
   "src/core/meeting_router/revision/publication.rs": "e0e86d8eb38f87c74cb237a177292191835a9dd65e4b7963816e9530fa6a283e",
+
   "src/core/meeting_router/vad.rs": "0772b2b3bbb786317f8e3d296434f330afab4c3f4023f29bfa50d237eafbf5e1",
+
   "src/core/meeting_router/vad/linux_tests.rs": "b94fbe1adb34b23d921a94f6d548bfe6dbda81170dd2f16a60b572c69d0c4267",
+
   "src/core/meeting_watch.rs": "97fe9a02e14fc7058b6c91b642d4836e4e6fa9ffa5c0d6175ea24ffa7924a149",
+
   "src/core/meetings.rs": "4fdaee344e2bd038ec8bebe5ca81e8406cf6862de5be3f5dc633a69804269256",
+
   "src/core/memory.rs": "910bd5ad44d4c80c3ed8cd45e3d78ea141d4d599a3ec78e53c4d15e7b114b23e",
+
   "src/core/memory/revision.rs": "9aa4debaeb9bea9a805e8df05a808c12716a22e29ce280c3b75493f2eedc9970",
+
   "src/core/memory_migration.rs": "4440677e7ebbc84d6ee21343e72f5b1ffd0cc6aeceda692f2e3f4b2e5153e3f5",
+
   "src/core/model_catalog.rs": "871f26ea5f51c7bfa844ceaa6f3db0a9316e162a2fbd6a6f0c276ba0512a3d09",
+
   "src/core/notes/draft.rs": "f67846e4f3e44e88175052b6d5906da0271493d83403bff0f0f8a0d5d9d659b2",
+
   "src/core/notes/joined.rs": "27f33b5b99b9fbeb08ddf3868de47026a98cd5e2b9c74e694ec9f2942ab9b481",
+
   "src/core/notes/queue.rs": "8fde1f874e5a6d914ca1ed77b15feaed02ea2bae3c484fd9e10a4bd853269521",
+
   "src/core/notes/status_detail.rs": "8c9c642856258caf225a450469d2649ef2801b749d1baa6cc29e236114558dad",
+
   "src/core/notes/tests.rs": "92d008f0a714ecfc47e878d81836d6b920767d90be55428596490bfff6d512b3",
+
   "src/core/notes/tests/corruption.rs": "22bd6f4b4809efa5810b067bccd89e089ffb3adc5e8806c7d7b768b8aa6c5147",
+
   "src/core/notes/tests/english_first.rs": "9e4c835f400539e24dd60fce3d64d4fac3392417cd34e05b015996f9b4471056",
+
   "src/core/notes/tests/idle.rs": "1042fecce32cbd639cafb25395077c718558d80aa4bc0e64812c3e0b9fe00dd6",
+
   "src/core/notes/tests/passes.rs": "90ea039fa9add926288afec6d710678e4601d46ccdb6745ff6e5a020c98b42c9",
+
   "src/core/notes/tests/review.rs": "c6d45633c1fc27bc6957a7d4d664fa1c1c432ceefb72c953f5d1fe61fe5c056a",
+
   "src/core/notes/tests/routing.rs": "8ee58c54c9332acd8755f8fb69bc170fdfe1f52764aafd115ae77bcac3e1b8c6",
+
   "src/core/notes/tests/translated/claude.rs": "ca0e4f01a306316d6cb67cd5fa35760aa9bfa94e4f6a60d924fadbba7002fbba",
+
   "src/core/notes/tests/translation.rs": "614ddd15f631c14524b57a9a66ac0b380029808351124a8d745989c4d2c1897e",
+
   "src/core/notes/tests/translation/authorization.rs": "767ba6dd4e52d237eeb53579ad57ecc06e11e7594c39da8f266ef8fedacf0cbb",
+
   "src/core/notes/tests/translation/busy.rs": "627c1afce015d51e36fded755f7f794b9a2c228b52e554385b3c9afb9fd8a44c",
+
   "src/core/notes/tests/translation/failed.rs": "6011375f08f1ce3d8a2b6a7b16304049375a6f938612f11cf284c00286dfa57a",
+
   "src/core/notes/tests/translation/payment.rs": "92bbc28b589bf430a3667aa13a9f3c25f4d826c7ecb308fb13fc485a4af34cb4",
+
   "src/core/notes/tests/translation/producer.rs": "9c651ff6ce000ff7b7f19d9559a67c48428e4d16175862df609861d6c89e28f3",
+
   "src/core/notes/tests/translation/qualification.rs": "6c26011e370ad5111e4170d972d1fa83e1ce3158bfff4b6fd8cc81504428a49b",
+
   "src/core/notes/transcript.rs": "2e608dbf09e38ecb72b0dac0c99970cac9f684ff8c66a40c1be5b2503654bcc7",
+
   "src/core/people.rs": "8ac2f1d902ee71a380d1473de1b5d1c91a56415db2d478af0dac8af270cdfc6a",
+
   "src/core/project_merge.rs": "a0ed36a42eda784e254d694ea97184c35d3054a6656a4e06cd828026be09fc93",
+
   "src/core/provider.rs": "ee1f5a201fca2aa9447752430902577d40e8545a7a7c0139c2dcda60a637450f",
+
   "src/core/recording_guard.rs": "32c2689b7c5fc59b5f364b132a1a31083ed85effb35b9ae1d2055a73f2242bab",
+
   "src/core/recording_source.rs": "8537c65ac9cf28b0bbfc7aff8eeb0e4989d8a14d2110f395269a7500cac00ac4",
+
   "src/core/recording_source/events.rs": "7a3609533aaf2963f70c5b3ef38719900ab37ac8e7a24ae8ee61c354af23eea7",
+
   "src/core/recording_source/events/tests.rs": "af49988deb7d2b694e2e6e86e0a26b3db17b043ebaa82dbe5171d46390a17772",
+
   "src/core/recording_source/folders.rs": "645cf454dfeeb3ce157c3fa4cdbb89746c5f55c6d0c64ff17f0021402246b41c",
+
   "src/core/recording_source/folders/linux_tests.rs": "82eecf6048a3ae19bad78f3e57841919382358e16356cd6b1229ca50db043073",
+
   "src/core/recording_source/tests.rs": "f599f85ce6e360ba9ee314037e8f7036c9de16939d02cee773662730c9b84f84",
+
   "src/core/relay_preview.rs": "71e028f0d14b8df40333b2ac5bfbceaf6e7885cfd74a9cf43d34dcb0686881ef",
+
   "src/core/relay_preview/migration.rs": "e9e0e4c86be43027861825ba387c26ca70a9f8567964de61c9113e2e79a8559f",
+
   "src/core/relay_preview/operations.rs": "9dcd718a190ba735d59805a466b49bce3554661cfe66b6495900db9b10ea29ba",
+
   "src/core/relay_preview/pairing.rs": "936be0f1d1d986656bf06979a1aa18572877a7de903d4cf8a9cd8115bf98092f",
+
   "src/core/relay_preview/shared.rs": "373e85ff8212a7cc4477c311aefb04c597837df07b6c9ec996270bda73d80bd8",
+
   "src/core/relay_preview/test_driver.rs": "f70afd16b9ecb02d5fe06c15d858a1d20cb7ff4ba24c9db853600b8a6b669475",
+
   "src/core/runner_process.rs": "49c5487cec279218781fcaaab0f1bf19f94437a8e532f5b4bd7d8e94f95814ec",
+
   "src/core/runners.rs": "86e63974051cbfcbd525bd7dcc1f415487737c558e4e57f8fc14649a17083fe9",
+
   "src/core/settle.rs": "b54fdc51adeebb328c76acc2788f9e3d5277eef45c03ec48fa9d6feec1e47c0f",
+
   "src/core/settle/tests.rs": "680a3699b5300b3411d2d0ea7f477c85b231478c70dff170c863c6b399378781",
+
   "src/core/speech_host.rs": "1d116b95c00b1588f5b86c841d5df1fd4c7148a184c37c83f06181bd9c894de3",
+
   "src/core/speech_host/journal.rs": "713180d87bf25768d847b281e8ae14d69b1a21ae298d328356207e39a1167980",
+
   "src/core/speech_host/tests.rs": "0bb589b717c9282a31c7cf1932f7872547b4d6c52de23271ccecc8722f632d78",
+
   "src/core/speech_host/upload.rs": "fb3f32b5ccde31f9f7a850d515200d062c506f9fae603865167735528e244957",
+
   "src/core/speech_jobs.rs": "70d2de2ad1953cedce12a59d8c750c03226b4f64af27c9dd4b01520253b1d851",
+
   "src/core/speech_jobs/runner.rs": "7d876eb5ed481838ec6e21c853da7c45cecb950f76d3bd1c01aa6ef1842df4a4",
+
   "src/core/speech_jobs/runner/tests.rs": "dd63909833e57bc016059631633df623291b7357fec6ecc191c0e123e8ee8736",
+
   "src/core/speech_sessions.rs": "1f5c67688e5b2cb8c74635fa4aaec423857bdcfde27129996cc8404689d8cebb",
+
   "src/core/store_io.rs": "c5739187ff6ada50ef6b01cc6e94c98bb4e60646574b5977e99cc1b086286619",
+
   "src/core/sync_state.rs": "5ed66965cebe7578baf77900557839707064f555a026b9de218895634083f664",
+
   "src/core/tasks.rs": "0071ad0533947f13a2e69faedad2286213197648c5db7fc4540725f7c7b78dec",
+
   "src/core/tasks_board.rs": "cccde82971ca59d1dff190d674b648c9cf80970beda6121092cf2a633fecf58b",
+
   "src/core/tasks_v2.rs": "cdd96decb3bf9d86db3230061836d1dd17211921c206422794bc6bc2b2521639",
+
   "src/core/ui_prefs.rs": "26870e51eebbc5f4a8a405b1dd81b680140ae8191d9bbf626f4ce708d91c4203",
+
   "src/hex_engine.rs": "4f89ee47a2b76376a6ad2bc56d3fcb099d9d7fb5a657003ad4a9b3a2ac1ab8d9",
+
   "src/hex_engine/audio_retention/tests.rs": "e222ae001e30661415465c8a1c055b135c37ac0821496dbe25c47d1307fa8a77",
+
   "src/hex_install.rs": "f8d19f8e6f25f43d04e06eef029e1f31f20e8127667af22dc42dd56fc2dd7d47",
+
   "src/hex_probe.rs": "0c50a06725535b61c042aa2a6c13a2c42e046bc88ee3354b7aaa0bf004a88757",
+
   "src/listener.rs": "727378cfa0a05a33fcaf0f27700d825dd58b9bea630dcab4bac3c1f8de54d7f7",
+
   "src/listener/completion.rs": "4600287c17331e9b6829a4fa76c37e67cd4768d91ddf1c4e00d409f1b52a992c",
+
   "src/listener/heartbeat.rs": "371d3dfb285e1ee2e60e27b2439204cd4e57518c355f55c08394002268713e07",
+
   "src/listener/notes_environment.rs": "aacd3494b717dd4645689f236f59cfefcd9caabaa38947f8bf2aedc1bceb08ba",
+
   "src/listener/status.rs": "cafc92702ba2f7c8eb0034887e0e199023d02f66bc39c7caef9ad84b5cf174e2",
+
   "src/mcp/access.rs": "63a5df969d655db4d06a7d8e0bb21494a263614d597a6cf8138f238da4542df2",
+
   "src/mcp/network.rs": "fae9133da2582d00c66ab63ce0ad5bf6397234eb41c8184809888314ae902369",
+
   "src/meeting_icon.rs": "a79590088c73e1ee7af4bf84889779f7a1e117b65670a0618468d80bc6dd41fc",
+
   "src/meeting_icon/native.rs": "b8057a243e1bd7d1679b65ca9962756722de4601a897ae83a9a25a30b58ff73c",
+
   "src/meeting_icon/native/window.rs": "73c861eb3618c74164a660bf76a7e6149f10b866600a75e5e707082782d09613",
+
   "src/operations.rs": "0dfc204d0fb7235730bf0e70e8e7f1f4df945e520de7fe05e0954576e31d44f9",
+
   "src/platform.rs": "41b82e4ebc729feb99c047aa7dd9e805c46ce7129567c7fe19a04f3ca0814b44",
+
   "src/platform/desktop_lock.rs": "4e86a3a74d5c19f8689501c4d0fc3b3a736872d87150f3733f8a6b648ffb19ca",
+
   "src/platform/unix.rs": "7821a7fb85bc2d032d8b1b76e0b7f016a6e3d3ace00c8d086829c8c111c4b620",
+
   "src/platform/user_runner.rs": "f5c10133b9d4110ccc88c021306a56c6aeb8b6fc96d50243999d5b553f7b1bf2",
+
   "src/platform/windows.rs": "804df1739422f039613f3ea8fa4067c3b5df069aa9e8b767cf1beb9f58922492",
+
   "src/platform/windows/job_process.rs": "b0f03992270107af88f15010bad4779d55149d8605dc2ed4c6f06efaf5bc945f",
+
   "src/response_time.rs": "508cc3d4ae57ac8277982199a998f222b8c1ffc2bccd11b55920ce3152c43540",
+
   "src/service.rs": "9a240c94b2055fa16928cc3311189a5a411371bca9311eb6a7b36728fc646b17",
+
   "src/service/schedule.rs": "e2049ae50e264bf47e77ae366ef91a21e78203fa25362fbd5a53b332dc9cb5c3",
+
   "src/service/speech/events.rs": "b47390c56d9a46f972a510e407c496c166647503a74ddbcacc17e7fc0b99c298",
+
   "src/service/speech/listener_tests.rs": "3beb25218f9ca86701f58cccda1d02a5a4d97ada9a55a4ed466f6b9e3dd34cff",
+
   "src/service/speech/native_tests.rs": "ed0aab6101e77a1115ef845a4638bdd866b02e75e271060ecbd0a37df2930db6",
+
   "src/service/speech/proofs.rs": "1b60fcf19f5227ab3703228b08580178c840c7677fc5a49c5d56a981d8ead5e2",
+
   "src/service/speech/proofs/faults.rs": "acace56e31c9d7c3cdfa934c190fd3681bed5ef1f335038eceeb52613f884e57",
+
   "src/service/speech/proofs/locking.rs": "e16b273d36a95fa4bda11e425c38c0e8d02722769fb75a19b96b10d90f1b17b4",
+
   "src/service/workers.rs": "d3e3abd1f69114ce2798268fdcbf9507b83b27a9137a40421367125b042dbc89",
+
   "src/sync_owner.rs": "bbc696ecd1b626713030f8001a3c16a30fa766920dea3339371b5c28e8bab554",
+
   "src/sync_owner/commands.rs": "579936c9e86261f16a13e22a3337e7d00d2cd16b58cf1ac67e5cbd4b27e7b283",
+
   "src/sync_owner/local.rs": "c231eda3c3f1a213381c3a1a0ca25486fe16146d20773bd22578e6955afec91c",
+
   "src/sync_owner/mcp.rs": "0f59d5b4431ac3b617b0621351e09005116e2d09492693abc47da3fbf614e724",
-  "src/ui/ai_notes.rs": "c3b4e15a4cb78ede3f48f916b54a392b58833544c95361340da64eacc44d3990",
+
+  "src/ui/ai_notes.rs": "26cd61289d87901884a499317bbb6b33c31a3d5db652535a245f5486c22fff9f",
+
   "src/ui/annotations.rs": "a8961c9c0cbb7fe34e63eb6d62dad6c9b9f3cd138d1ee9a35dd5babfd7fd3bc6",
+
   "src/ui/annotations/notebooks.rs": "cf11716c9f2c3551aef0e0b8f1c01cedc75f48f23b242d7ad309b1c2daa44cd8",
-  "src/ui/annotations/workflow.rs": "0721106db04998abcfeba96ed6f4e4e297de1d60f503eadbbacd36a392ff1104",
+
+  "src/ui/annotations/workflow.rs": "d07126006381798ffb3fe767f792144558880034a85c013709704866277f95d2",
+
   "src/ui/area.rs": "8d8707a6b818d7e08880b92747098277e3c0d46c1badfa0dd27493047d16aad4",
+
   "src/ui/area_scene.rs": "ed9d0a3291369f5ab6a8a3e2c0da8a04bb05ba7155a065cd2604c9da7b1bf160",
-  "src/ui/ask_settings.rs": "9f224b3d477bf938277064c440f99f4191e43b037b5c51282cb29713525f1b84",
+
+  "src/ui/ask_settings.rs": "c6aba5971947b5eb71090b820932d93fd5041bb05be55a9e65ae1000f36608ac",
+
   "src/ui/ask_switch_tests.rs": "ba03279027fcfe9ae56a0cf29222208aa9e44baac5b61a6742a500ed3eb7e339",
+
   "src/ui/benchmark.rs": "3eea004745d87db3e40f407a7d320827a47772f1185355a0c6397be3df15e9ff",
+
   "src/ui/check.rs": "a1db8783a28cc14293132aeaa8948d0a2f45aa4c2e327c35ff5d0ce2f64fd928",
-  "src/ui/cloud_ask.rs": "19f3464bf233e66ba570830d018e9fde4fb7c5d9a0ea1a7e24fd9fe7525f5117",
+
+  "src/ui/cloud_ask.rs": "0b3cd72ff4fabf3bfdf64e0017c44851bef8113df24feede14e991364312e0ae",
+
   "src/ui/edit_worker.rs": "f3d8212397e72b9255aeda147e710d300be5d5b4555ab37ae8c479f82d8387e3",
+
   "src/ui/final_refresh_proofs.rs": "4989e687f2aa229c6ad0f7883147d48ae569a29e8b271ab8cf96e9c62b68d56c",
-  "src/ui/hex.rs": "d2dca5ed8e4fbf61b8a15e3a82fb064eed5a42c0f8f447a82ceb70bcc964413e",
+
+  "src/ui/hex.rs": "569bd92ae949ef590033ec7e4122ba3cf2487742eebfe64403aa1eab375c4036",
+
   "src/ui/hex/connection/stop_tests.rs": "5dcc96cab3be2f3ec42a93c140b6144500a151e47b2ac1d85d6bc38235911c44",
+
   "src/ui/hex/connection/stop_tests/api.rs": "249e5ba679241506285eb27864920f89940ad44d599167bc543ff91b736ef175",
+
   "src/ui/hex/connection/stop_tests/readiness.rs": "1affb66b203a249c971286341d62d22e1b33b3ce745619949bae00e3208c6d81",
-  "src/ui/hex/settings.rs": "58e9d4ff86568468041323171778b055c8932ffd2faea3397221bf544b32c338",
+
+  "src/ui/hex/settings.rs": "dd078512282676503bb37cd31b48ac032f5fa60040c87f0bad4a2364572052d0",
+
   "src/ui/hex/setup.rs": "494e5d0651bff961f55877cadcd419e11f9e9b25221059e9520e458a52be2eb2",
+
   "src/ui/idle_cpu.rs": "ab45c9a037baff122cbbd3a35ef2de88d452a16666265c0e89166aa8624ff239",
+
   "src/ui/idle_cpu/measurement.rs": "e4be960feb8fd3fe5bef8d5d8e3c409aa8cf6e8d8fb77fccc0c4011777af7c2b",
-  "src/ui/live.rs": "3eb6a6495c395f607f10e0be928e1ff1f6207a943f57e803d1f6d41141dce9bd",
+
+  "src/ui/live.rs": "d29d3dd94154c063b891aee39006f98278018e5c553f188f876982fa15bfcab3",
+
   "src/ui/mcp_connect.rs": "b7372660109d111f146b60c90b4a3387c66b2e9eebdc0332ac2bc07034cbba20",
+
   "src/ui/memory.rs": "ef2dfa9a3d6fc311f00b709e4c006adc7e66878cf58583fa53bc684ef5a007ac",
+
   "src/ui/memory/settled.rs": "9d0915dfa235083870103a6872b2fc6e23c267328989d288b2299e1e0e460b58",
+
   "src/ui/mod.rs": "4930791c656fbb8524d1c52cfb8b99d855212a205a9fd46fe3f72e86ff4ae5c3",
-  "src/ui/models.rs": "652e50da1b1d7c3e3f45b8da81879830e08b543a8bfb8f9832335cd2dd6ba169",
+
+  "src/ui/models.rs": "607860762e895e69abcfe1e5a3686747db62be0c179248de8651e49df0482b6d",
+
   "src/ui/notes_status.rs": "4480ef7baf910c462a4ec3031f7d83b08bea61c01f43900176cb7a0753fb1692",
+
   "src/ui/project_merge.rs": "c60d92454a03684ea21f474a5ae92bce32831d830501883fa0af9e66c24d0051",
+
   "src/ui/recording_state_tests.rs": "724641313ec0e43831ce4c8b91b667bbae152998dc717c9a00be89845a0fb8a0",
+
   "src/ui/refresh.rs": "20c72bad53b3af33852416b08337304dfebb1db775e9d7e7cacfd2bbf98d65c0",
+
   "src/ui/relay.rs": "661d261d0e621e417a27f04cb4c6d75c23d9bf00aa74432a3c4714e243a83658",
+
   "src/ui/tasks_board.rs": "2332fcab9f2cbbf28f92e9e9b6f3d14993116fc1f960cdb58551479bc5e9a70c",
+
   "src/ui/theme.rs": "779a8fdf6bdc1a0721bd1baae9a07482a1f9dd09412a344c426cfa43eb9ced2e",
+
   "src/ui/updates.rs": "f0bb32c4b5ac00b7240725f3386fb15374ac7599a9cba6c66a0b780a8e0a53b7",
+
   "src/updates_windows.rs": "bfeda53ca6047cbe1150138ec61b340b1f38c2b0471ba088b5b470a5d0982e38"
 }

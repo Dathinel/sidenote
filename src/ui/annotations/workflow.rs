@@ -1012,8 +1012,14 @@ pub(in crate::ui) fn agents_section(
     p: Palette,
     layer: &mut Vec<El>,
 ) -> El {
-    use super::super::{ask_settings::model_menu, hex::settings::setting_row, widgets::hairline};
+    use super::super::{
+        ask_settings::model_menu,
+        cards::settings_divider,
+        hex::settings::{row_field_kit, setting_row, short_select_width},
+        widgets::row_action,
+    };
     use sidenote::core::{ask_options, ask_session, notes::Helper};
+    let k = &row_field_kit(k, p);
     let selected = s.annotations.options.as_ref().map(|o| o.helper);
     let helper = selected.unwrap_or(Helper::Claude);
     let runner = s
@@ -1026,7 +1032,7 @@ pub(in crate::ui) fn agents_section(
     let mut choices = row().gap(10.0).flex_wrap();
     for helper in [Helper::Claude, Helper::Codex] {
         choices = choices.child(
-            super::super::area::button(
+            row_action(
                 helper.name(),
                 &format!("annotation-agent-{}", helper.name()),
                 p,
@@ -1046,6 +1052,7 @@ pub(in crate::ui) fn agents_section(
         Some(current),
         other,
     )
+    .width(short_select_width(s, 220.0))
     .disabled(runner.is_none())
     .open(s.annotations.model_open)
     .on_toggle(|s: &mut State| s.annotations.model_open = !s.annotations.model_open)
@@ -1085,7 +1092,7 @@ pub(in crate::ui) fn agents_section(
                     rune_kit::TextInput::new(&s.annotations.model)
                         .label("Other annotation model")
                         .placeholder("Model name")
-                        .height(34.0)
+                        .height(30.0)
                         .on_edit(|s: &mut State| &mut s.annotations.model)
                         .on_submit(|s: &mut State, _| s.save_annotation_model())
                         .build(k)
@@ -1093,14 +1100,14 @@ pub(in crate::ui) fn agents_section(
                         .w(205.0),
                 )
                 .child(
-                    super::super::area::button("Save", "annotation-save-model", p)
+                    row_action("Save", "annotation-save-model", p)
                         .on_press(|s: &mut State| s.save_annotation_model()),
                 ),
         );
     }
     let mut body = col().w_full()
         .child(setting_row(s, "annotation-agent-row", "Agent", "Images and words are sent only after Send for note. Image input for OpenCode is not supported in this version.", choices, true, p))
-        .child(hairline(p))
+        .child(settings_divider(p))
         .child(setting_row(s, "annotation-model-row", "Model", "Choose an offered model, or choose Other to enter a model name.", model, true, p));
     if !s.annotations.status.is_empty() {
         body = body.child(
