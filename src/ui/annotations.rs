@@ -6,12 +6,12 @@ use super::{
     theme::{self, Palette},
     widgets::{link, pressable, scroll},
 };
-use rune::{El, Image, ImageCache, Key, TextEdit, col, el, row};
-use rune_kit::TextArea;
+use rune::{Color, El, Image, ImageCache, Key, Span, TextEdit, col, el, row};
+use rune_kit::{Menu, MenuItem, Placement, TextArea};
 use sidenote::{
     core::{
         annotations::{
-            self, Capture, Keyframe, Mark, Scan, Word,
+            self, Capture, Keyframe, Mark, Scan,
             generation::{self, Epoch, Progress, Ticket},
             media::{self, ApprovedCapture, ReviewFrame},
             note,
@@ -35,6 +35,7 @@ pub struct Annotations {
     errors: Vec<String>,
     selected: Option<PathBuf>,
     transcript: bool,
+    menu_open: bool,
     loading: bool,
     images: Vec<Result<Image, String>>,
     shortcut: Option<String>,
@@ -281,6 +282,7 @@ impl State {
         self.annotations.editing.clear();
         self.annotations.selected = Some(capture.folder.clone());
         self.annotations.transcript = false;
+        self.annotations.menu_open = false;
         self.annotations.images.clear();
         let sender = self.events_tx.clone();
         let wake = self.waker.clone().unwrap_or_else(|| Arc::new(|| {}));
@@ -493,47 +495,26 @@ fn number(n: usize, p: Palette) -> El {
         .fill(p.ink)
         .child(roles::CAPTION.line(n.to_string(), p.card))
 }
-fn words_text(words: &[&Word]) -> String {
-    words
-        .iter()
-        .map(|w| w.text.as_str())
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-fn callout(c: &Capture, n: usize, mark: &Mark, p: Palette) -> El {
-    let words = c.words_for_mark(mark);
-    let description = mark
-        .description
-        .as_deref()
-        .filter(|d| !d.is_empty())
-        .unwrap_or("Mark without a description");
-    let mut content = col().w_full().min_w(0.0).gap(7.0).child(
-        row()
-            .gap(8.0)
-            .items_center()
-            .child(number(n, p))
-            .child(roles::NAME.wrap(description, p.ink).grow(1.0).min_w(0.0)),
-    );
-    if let (Some(first), Some(last)) = (words.first(), words.last()) {
-        content = content
-            .child(roles::META.wrap(
-                format!("Words nearby, {} to {}", time(first.t0), time(last.t1)),
-                p.faint,
-            ))
-            .child(
-                roles::SMALL
-                    .wrap(words_text(&words), p.ink)
-                    .selectable(true),
-            );
-    } else {
-        content = content.child(roles::SMALL.wrap("No timed words near this mark.", p.soft));
+fn step_excerpt<'a>(c: &Capture, mark: &'a Mark) -> Option<(&'a str, String)> {
+    let heading = mark.description.as_deref()?.trim();
+    if heading.is_empty() {
+        return None;
     }
-    content
-        .key(format!("annotation-callout-{n}"))
-        .padding(12.0)
-        .radius(8.0)
-        .border(1.0, p.line)
-        .fill(p.card)
+    let words = c.words_for_mark(mark);
+    let excerpt = words
+        .split_inclusive(|word| {
+            word.text
+                .trim()
+                .trim_end_matches(['"', '\'', ')', '”', '’'])
+                .ends_with(['.', '?', '!', '。', '？', '！'])
+        })
+        .take(2)
+        .flatten()
+        .map(|word| word.text.trim())
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    (!excerpt.is_empty()).then_some((heading, excerpt))
 }
 fn frame_image(
     s: &State,
@@ -580,6 +561,7 @@ fn frame_image(
         .w(width)
         .h(height)
         .pixels(image.pixels())
+        .clip_rounded(8.0)
         .role("img")
         .label(format!(
             "{}: {}",
@@ -603,23 +585,96 @@ fn frame_image(
                     .absolute(x * width, y * height)
                     .w(bw)
                     .h(bh)
-                    .border(1.25, p.ink)
-                    .radius(3.0),
+                    .border(1.5, Color::WHITE)
+                    .radius(4.0)
+                    .child(
+                        el().absolute(1.5, 1.5)
+                            .w((bw - 3.0).max(0.0))
+                            .h((bh - 3.0).max(0.0))
+                            .border(1.5, Color::BLACK)
+                            .radius(2.5),
+                    ),
             );
             canvas = canvas.child(
-                number(i + 1, p)
+                col()
                     .key(format!("annotation-badge-{}", i + 1))
+                    .size(22.0, 22.0)
                     .absolute(
-                        (x * width).min((width - 24.0).max(0.0)),
-                        (y * height).min((height - 24.0).max(0.0)),
+                        (x * width - 11.0).clamp(0.0, (width - 22.0).max(0.0)),
+                        (y * height - 11.0).clamp(0.0, (height - 22.0).max(0.0)),
                     )
+                    .center()
+                    .radius(11.0)
+                    .fill(Color::BLACK)
+                    .border(1.5, Color::WHITE)
+                    .child(roles::CAPTION.line((i + 1).to_string(), Color::WHITE))
                     .label(format!("Mark {}", i + 1)),
             );
         }
     }
     canvas
 }
-fn capture_page(s: &State, c: &Capture, width: f32, p: Palette) -> El {
+fn capture_menu(s: &State, c: &Capture, p: Palette, layer: &mut Vec<El>) -> El {
+    let trigger = super::widgets::icon_button(
+        &super::icons::MORE,
+        "Capture actions",
+        "annotation-actions-button",
+        super::widgets::ButtonRole::Ghost,
+        p,
+    )
+    .size(28.0, 28.0)
+    .px(6.0)
+    .on_press(|s: &mut State| s.annotations.menu_open = !s.annotations.menu_open);
+    let folder = c.folder.clone();
+    let mut menu = Menu::new("annotation-actions")
+        .trigger(trigger)
+        .open(s.annotations.menu_open)
+        .placement(Placement::BottomEnd)
+        .on_close(|s: &mut State| s.annotations.menu_open = false)
+        .item(MenuItem::new("Write note").on_select(|s: &mut State| {
+            s.annotations.menu_open = false;
+            s.review_annotation();
+        }));
+    if s.annotations.note.is_some() {
+        menu = menu.item(
+            MenuItem::new("Open annotation note").on_select(|s: &mut State| {
+                s.annotations.menu_open = false;
+                s.annotations.note_open = true;
+            }),
+        );
+    }
+    menu.item(MenuItem::new("Add to notebook").on_select(|s: &mut State| {
+        s.annotations.menu_open = false;
+        s.choose_notebook_for_capture();
+    }))
+    .item(MenuItem::new("Files").on_select(move |s: &mut State| {
+        s.annotations.menu_open = false;
+        if rune::tooling::headless_run().is_none()
+            && sidenote::platform::open_folder(&folder).is_err()
+        {
+            s.annotations
+                .errors
+                .push("Could not open the capture folder.".into());
+        }
+    }))
+    .item(
+        MenuItem::new(if s.annotations.transcript {
+            "Back to steps"
+        } else {
+            "Transcript"
+        })
+        .on_select_tx(|s: &mut State, tx| {
+            s.annotations.menu_open = false;
+            s.annotations.transcript = !s.annotations.transcript;
+            tx.scroll_to_y("annotations-pane", 0.0);
+        }),
+    )
+    .build(&theme::kit(&p), layer)
+}
+
+const TRANSCRIPT_CHUNK: usize = 28;
+
+fn capture_page(s: &State, c: &Capture, width: f32, p: Palette, layer: &mut Vec<El>) -> El {
     let mut page = col().w_full().gap(14.0).child(
         crate::ui::widgets::action("Back to annotations", p)
             .key("annotations-back")
@@ -627,6 +682,7 @@ fn capture_page(s: &State, c: &Capture, width: f32, p: Palette) -> El {
             .on_press(|s: &mut State| {
                 s.cancel_annotation_note();
                 s.annotations.selected = None;
+                s.annotations.menu_open = false;
                 s.annotations.images.clear();
                 s.annotations.review = None;
                 s.annotations.note_open = false;
@@ -635,82 +691,64 @@ fn capture_page(s: &State, c: &Capture, width: f32, p: Palette) -> El {
     if s.annotations.busy || s.annotations.note_open {
         return note_page(s, c, width, p, page);
     }
-    page = page
-        .child(roles::GROUP.wrap(c.app(), p.soft))
-        .child(roles::SECTION.wrap(c.title(), p.ink).max_lines(2))
-        .child(facts(c, p));
     if s.annotations.review.is_some() {
-        return review_page(s, c, width, p, page);
-    }
-    page = page.child(
-        row()
-            .gap(12.0)
-            .child(
-                super::area::button("Write note", "annotation-write-note", p)
-                    .on_press(|s: &mut State| s.review_annotation()),
-            )
-            .children(s.annotations.note.as_ref().map(|_| {
-                link("Open annotation note", p)
-                    .key("annotation-open-note")
-                    .on_press(|s: &mut State| s.annotations.note_open = true)
-            })),
-    );
-    page = page.child(
-        crate::ui::widgets::action("Add to notebook", p)
-            .key("capture-add-notebook")
-            .on_press(|s: &mut State| s.choose_notebook_for_capture()),
-    );
-    let folder = c.folder.clone();
-    page = page.child(link("Show files", p).key("annotation-show-files").on_press(
-        move |s: &mut State| {
-            if rune::tooling::headless_run().is_some() {
-                return;
-            }
-            if sidenote::platform::open_folder(&folder).is_err() {
-                s.annotations
-                    .errors
-                    .push("Could not open the capture folder.".into());
-            }
-        },
-    ));
-    let mut tabs = row().gap(8.0).role("tablist").label("Capture views");
-    for (transcript, label, key) in [
-        (false, "Frames", "annotation-frames-tab"),
-        (true, "Transcript", "annotation-transcript-tab"),
-    ] {
-        let active = s.annotations.transcript == transcript;
-        let (role, ink) = if active {
-            (roles::CONTROL.bold(), p.ink)
-        } else {
-            (roles::CONTROL, p.soft)
-        };
-        tabs = tabs.child(
-            pressable(role.wrap(label, ink))
-                .key(key)
-                .role("tab")
-                .label(label)
-                .checked(active)
-                .px(12.0)
-                .py(8.0)
-                .radius(6.0)
-                .fill(if active { p.sel } else { p.bg })
-                .on_press(move |s: &mut State| s.annotations.transcript = transcript),
+        return review_page(
+            s,
+            c,
+            width,
+            p,
+            page.child(roles::GROUP.wrap(c.app(), p.soft))
+                .child(roles::SECTION.wrap(c.title(), p.ink).max_lines(2))
+                .child(facts(c, p)),
         );
     }
-    page = page.child(tabs);
+    let steps = c.data.keyframes.len();
+    page = page.child(
+        col()
+            .w_full()
+            .gap(4.0)
+            .child(
+                roles::SECTION
+                    .wrap(c.title(), p.ink)
+                    .font(theme::display(26.0))
+                    .max_lines(2),
+            )
+            .child(
+                row()
+                    .w_full()
+                    .items_center()
+                    .gap(8.0)
+                    .child(
+                        roles::meta_line(
+                            &[
+                                c.app().to_owned(),
+                                date(c),
+                                time(c.data.duration_ms as f64 / 1000.0),
+                                format!("{steps} {}", if steps == 1 { "step" } else { "steps" }),
+                            ],
+                            p,
+                        )
+                        .grow(1.0)
+                        .min_w(0.0),
+                    )
+                    .child(capture_menu(s, c, p, layer)),
+            ),
+    );
     if s.annotations.transcript {
         let transcript = &c.data.transcript;
         let mut text = col()
             .w_full()
             .gap(16.0)
             .key("annotation-transcript")
-            .role("tabpanel");
+            .role("region")
+            .label("Capture transcript");
         if !transcript.words.is_empty() {
-            for (i, chunk) in transcript.words.chunks(28).enumerate() {
+            for (i, chunk) in transcript.words.chunks(TRANSCRIPT_CHUNK).enumerate() {
                 text = text.child(
                     col()
                         .w_full()
                         .gap(4.0)
+                        .key(format!("annotation-transcript-part-{i}"))
                         .child(roles::META.wrap(time(chunk[0].t0), p.faint))
                         .child(
                             roles::READ
@@ -738,65 +776,82 @@ fn capture_page(s: &State, c: &Capture, width: f32, p: Palette) -> El {
         }
         return page.child(hex::settings::panel(p).child(text.padding(18.0)));
     }
-    let side_by_side = width >= 860.0;
-    let image_width = if side_by_side {
-        width - 300.0 - 20.0
-    } else {
-        width
-    };
+    let side_by_side = width >= 640.0;
+    let image_width = width.min(360.0);
     for (index, frame) in c.data.keyframes.iter().enumerate() {
-        let reason = frame.reason.as_deref().unwrap_or("Captured frame");
-        let mut callouts = col()
-            .w(if side_by_side { 300.0 } else { width })
-            .min_w(0.0)
-            .gap(10.0);
+        let step = index + 1;
+        let timestamp = time(frame.t);
+        let transcript_part = c
+            .data
+            .transcript
+            .words
+            .iter()
+            .position(|word| word.t1 >= frame.t)
+            .unwrap_or_else(|| c.data.transcript.words.len().saturating_sub(1))
+            / TRANSCRIPT_CHUNK;
+        let mut details = col().grow(1.0).min_w(0.0).gap(8.0).child(
+            row()
+                .items_center()
+                .gap(4.0)
+                .child(roles::META.line(format!("Step {step}{}", roles::DOT.trim_end()), p.faint))
+                .child(
+                    pressable(
+                        roles::TIME
+                            .line(&timestamp, p.soft)
+                            .decorations(vec![Span::new(0, timestamp.len()).underline(p.soft)]),
+                    )
+                    .key(format!("annotation-step-time-{step}"))
+                    .role("link")
+                    .label(format!("Transcript at {timestamp}"))
+                    .on_press_tx(move |s: &mut State, tx| {
+                        s.annotations.transcript = true;
+                        tx.scroll_to_y("annotations-pane", 0.0);
+                        tx.scroll_key_to(
+                            format!("annotation-transcript-part-{transcript_part}"),
+                            12.0,
+                        );
+                    }),
+                ),
+        );
         for (i, mark) in c.data.marks.iter().enumerate() {
             if c.frame_for_mark(mark)
                 .is_some_and(|f| f.index == frame.index)
+                && let Some((heading, excerpt)) = step_excerpt(c, mark)
             {
-                callouts = callouts.child(callout(c, i + 1, mark, p));
+                details = details.child(
+                    col()
+                        .w_full()
+                        .gap(4.0)
+                        .key(format!("annotation-callout-{}", i + 1))
+                        .child(roles::TITLE.wrap(heading, p.ink).role("heading"))
+                        .child(roles::READ.wrap(excerpt, p.body).selectable(true)),
+                );
             }
         }
         let visual = frame_image(s, c, index, frame, image_width, p);
         let body = if side_by_side {
-            row().w_full().gap(20.0).child(visual).child(callouts)
+            row().items_start().gap(24.0).child(visual).child(details)
         } else {
-            col().w_full().gap(12.0).child(visual).child(callouts)
+            col().gap(12.0).child(visual).child(details)
         };
         page = page.child(
             col()
                 .w_full()
-                .gap(10.0)
-                .mt(8.0)
+                .gap(16.0)
                 .key(format!("annotation-frame-{}", frame.index))
-                .child(roles::GROUP.wrap(
-                    format!("Frame {}  {}  {}", index + 1, roles::DOT, reason),
-                    p.soft,
-                ))
-                .child(body),
+                .child(el().w_full().h(1.0).fill(p.line))
+                .child(body.w_full()),
         );
     }
-    if c.data.keyframes.is_empty() {
+    if steps == 0 {
         page = page.child(roles::SMALL.wrap("This capture has no keyframes yet.", p.soft));
-    }
-    let missing: Vec<_> = c
-        .data
-        .marks
-        .iter()
-        .enumerate()
-        .filter(|(_, m)| c.frame_for_mark(m).is_none())
-        .collect();
-    if !missing.is_empty() {
-        page = page.child(roles::GROUP.wrap("Marks without a matching frame", p.soft));
-        for (i, mark) in missing {
-            page = page.child(callout(c, i + 1, mark, p));
-        }
     }
     page
 }
 pub fn pane(s: &State, p: Palette, narrow: bool) -> El {
     let width = (s.app_w.get() - nav::width(s) - 1.0 - if narrow { 32.0 } else { 64.0 })
         .clamp(240.0, 1040.0);
+    let mut layer = Vec::new();
     let mut content = if s.annotations.notebooks.shared.is_some() {
         notebooks::confirmation(s, p)
     } else if s.annotations.notebooks.picker.is_some() {
@@ -809,7 +864,7 @@ pub fn pane(s: &State, p: Palette, narrow: bool) -> El {
         .iter()
         .find(|c| Some(&c.folder) == s.annotations.selected.as_ref())
     {
-        capture_page(s, c, width, p)
+        capture_page(s, c, width, p, &mut layer)
     } else {
         let mut list = col()
             .w_full()
@@ -913,7 +968,7 @@ pub fn pane(s: &State, p: Palette, narrow: bool) -> El {
                 .role("status"),
         );
     }
-    scroll(
+    let viewport = scroll(
         col()
             .w_full()
             .items_center()
@@ -921,7 +976,11 @@ pub fn pane(s: &State, p: Palette, narrow: bool) -> El {
             .child(content.w(width).pb(40.0)),
         "annotations-scroll",
     )
-    .key("annotations-pane")
+    .key("annotations-pane");
+    rune_kit::root(viewport, layer)
+        .key("annotation-menu-root")
+        .grow(1.0)
+        .min_h(0.0)
 }
 
 pub fn scene(s: &mut State, name: &str) {
@@ -1018,6 +1077,36 @@ pub fn scene(s: &mut State, name: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn step_text_needs_a_heading_and_words_and_keeps_at_most_two_sentences() {
+        let mut capture = Capture {
+            folder: PathBuf::new(),
+            data: serde_json::from_value(serde_json::json!({
+                "transcript": {"words": [
+                    {"t0": 0.0, "t1": 0.5, "text": "First."},
+                    {"t0": 0.5, "t1": 1.0, "text": "Second!"},
+                    {"t0": 1.0, "t1": 1.5, "text": "Third?"}
+                ]}
+            }))
+            .unwrap(),
+        };
+        let mut mark = Mark {
+            description: Some("  Sample mark  ".into()),
+            t1: 1.0,
+            ..Default::default()
+        };
+        assert_eq!(
+            step_excerpt(&capture, &mark),
+            Some(("Sample mark", "First. Second!".into()))
+        );
+        mark.description = Some("  ".into());
+        assert_eq!(step_excerpt(&capture, &mark), None);
+        mark.description = Some("Sample mark".into());
+        capture.data.transcript.words.clear();
+        assert_eq!(step_excerpt(&capture, &mark), None);
+    }
+
     #[test]
     fn hints_use_only_reported_non_secret_annotation_settings() {
         let settings =
