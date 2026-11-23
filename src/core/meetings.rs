@@ -1197,7 +1197,10 @@ mod recycle_tests {
             Err(DeleteError::Refused(Eligibility::Recording))
         ));
         let txn = attempt().unwrap();
-        assert!(!source.join("notes.md").exists());
+        assert_eq!(
+            fs::read(source.join("notes.md")).unwrap(),
+            b"synthetic sidecar"
+        );
         let settings = crate::core::notes::NotesSettings::default();
         super::super::notes::queue::enqueue_in(
             &state,
@@ -1215,7 +1218,10 @@ mod recycle_tests {
                 .is_err()
         );
         assert!(super::super::recording_guard::keep_in(&state, id).is_err());
-        assert!(!source.join("notes.md").exists());
+        assert_eq!(
+            fs::read(source.join("notes.md")).unwrap(),
+            b"synthetic sidecar"
+        );
         assert!(!state.join("local/notes-jobs/100-1.json").exists());
         assert!(!state.join("local/router-queue/100-1.json").exists());
         assert!(!state.join("local/recording-guard/100-1.json").exists());

@@ -99,7 +99,7 @@
   "src/core/meeting_router/vad.rs": "0772b2b3bbb786317f8e3d296434f330afab4c3f4023f29bfa50d237eafbf5e1",
   "src/core/meeting_router/vad/linux_tests.rs": "b94fbe1adb34b23d921a94f6d548bfe6dbda81170dd2f16a60b572c69d0c4267",
   "src/core/meeting_watch.rs": "97fe9a02e14fc7058b6c91b642d4836e4e6fa9ffa5c0d6175ea24ffa7924a149",
-  "src/core/meetings.rs": "a1134aaa67d71351472c11926dc2ca52b631b54e802adcfe74d0988726c2c2b4",
+  "src/core/meetings.rs": "e8a5b928f6793fef3cc4ee84c559e840599702ff64a67b214a76be6aa34359d0",
   "src/core/memory.rs": "910bd5ad44d4c80c3ed8cd45e3d78ea141d4d599a3ec78e53c4d15e7b114b23e",
   "src/core/memory/revision.rs": "9aa4debaeb9bea9a805e8df05a808c12716a22e29ce280c3b75493f2eedc9970",
   "src/core/memory_migration.rs": "4440677e7ebbc84d6ee21343e72f5b1ffd0cc6aeceda692f2e3f4b2e5153e3f5",
