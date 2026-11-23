@@ -409,7 +409,7 @@
 
   "src/ui/cloud_ask.rs": "0b3cd72ff4fabf3bfdf64e0017c44851bef8113df24feede14e991364312e0ae",
 
-  "src/ui/edit_worker.rs": "9ef59484c65b747b761d8e7f00a01f710f989dba4038ba56f2a616bd20781399",
+  "src/ui/edit_worker.rs": "d2abad40430b1bea8616a3da1712b91958b190df2b100f0b67acda292af8b274",
 
   "src/ui/final_refresh_proofs.rs": "4989e687f2aa229c6ad0f7883147d48ae569a29e8b271ab8cf96e9c62b68d56c",
 
@@ -453,7 +453,7 @@
 
   "src/ui/relay.rs": "661d261d0e621e417a27f04cb4c6d75c23d9bf00aa74432a3c4714e243a83658",
 
-  "src/ui/tasks_board.rs": "4e2358903dac2751679ba01ec224e0b8b8cab8b6e47826970d7879afb82cba5b",
+  "src/ui/tasks_board.rs": "237fc917ba09b9ed8506ebbf42795c6c79e754a38e87a1fcf1c267099e49a514",
 
   "src/ui/theme.rs": "779a8fdf6bdc1a0721bd1baae9a07482a1f9dd09412a344c426cfa43eb9ced2e",
 

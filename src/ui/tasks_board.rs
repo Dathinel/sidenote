@@ -3,8 +3,9 @@
 //! through the same status edit the task panel uses. The page and the panel are `tasks.rs`;
 //! this file only lays the cards out. It is a child of that module, so it reads its helpers.
 use super::{
-    Panel, RowId, State, View, avatar, button, cards, chevron, date_chip, empty_note, owner_name,
-    pressable, project_dot, roles, shown_title, status_dot, tick_key,
+    Panel, RowId, State, TickState, View, avatar, button, cards, chevron, date_chip, empty_note,
+    owner_name, pressable, project_dot, roles, shown_title, status_dot, task_tick_feedback,
+    tick_key,
 };
 use crate::ui::{edit_worker::Job, theme::Palette};
 use rune::{El, Key, KeyEvent, Tx, col, row};
@@ -85,14 +86,14 @@ impl State {
 
     /// Moves one card to `target`.
     pub(super) fn move_card(&mut self, id: &str, index: usize, target: BoardColumn) {
-        self.apply_intent(id, index, MoveIntent::to(target));
+        self.apply_intent(id, index, MoveIntent::to(target), false);
     }
 
     /// Saves what a move asks for. The card is drawn where it is going at once; its intent
     /// merges with any move still waiting on the same card, and the save writes the final
     /// status and tick as values, so a queue of quick moves ends where the last one said and
     /// never forgets the status from before a trip through Done.
-    fn apply_intent(&mut self, id: &str, index: usize, intent: MoveIntent) {
+    fn apply_intent(&mut self, id: &str, index: usize, intent: MoveIntent, checkbox: bool) {
         self.tasks.board_menu = None;
         let Some(t) = self.tasks.item(id, index).cloned() else {
             return;
@@ -108,25 +109,29 @@ impl State {
             ));
             return;
         }
-        let source = match self.edit_source(&t) {
-            Some(source) => source,
-            // A tick needs no summary file. A status does.
-            None if intent.status.is_none() => std::path::PathBuf::new(),
-            None => {
-                self.tasks.notice =
-                    Some("This task's meeting is on another device. Move it there.".into());
-                return;
-            }
-        };
-        let tick = self.stage_task_move(&t, intent, None);
-        self.publish_move(Job::Move {
-            store: self.tasks.store.clone(),
-            ticks: self.store.clone(),
-            task: Box::new(t.clone()),
-            source,
-            intent,
-            tick,
-        });
+        if let Some(on) = intent.done.filter(|_| checkbox) {
+            self.publish_checkbox(Box::new(t), on, TickState::Pending);
+        } else {
+            let source = match self.edit_source(&t) {
+                Some(source) => source,
+                // A tick needs no summary file. A status does.
+                None if intent.status.is_none() => std::path::PathBuf::new(),
+                None => {
+                    self.tasks.notice =
+                        Some("This task's meeting is on another device. Move it there.".into());
+                    return;
+                }
+            };
+            let tick = self.stage_task_move(&t, intent, None);
+            self.publish_move(Job::Move {
+                store: self.tasks.store.clone(),
+                ticks: self.store.clone(),
+                task: Box::new(t),
+                source,
+                intent,
+                tick,
+            });
+        }
         self.reveal_card(id, index);
         self.say(if intent.status.is_none() && intent.done == Some(false) {
             format!(
@@ -146,7 +151,7 @@ impl State {
             return;
         };
         let now = self.effective(&t).done;
-        self.apply_intent(id, index, MoveIntent::tick(!now));
+        self.apply_intent(id, index, MoveIntent::tick(!now), true);
     }
 
     /// Queues a reveal against the next board refresh.
@@ -642,7 +647,8 @@ fn card(
                 .children(when),
         )
         .child(source)
-        .child(area);
+        .child(area)
+        .children(task_tick_feedback(s, t, "board-tick", p));
     if let Some(count) = conflicts {
         body = body.child(
             roles::SMALL
