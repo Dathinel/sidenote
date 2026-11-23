@@ -485,7 +485,7 @@ pub fn section(s: &State, p: Palette) -> El {
             &format!("Update channel · {}", channel_label(s.updates.channel)),
             channel_help,
             super::widgets::button(
-                &format!("Switch to {}", channel_label(other)),
+                format!("Switch to {}", channel_label(other)),
                 "update-channel-switch",
                 super::widgets::ButtonRole::Secondary,
                 p,

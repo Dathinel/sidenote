@@ -1538,7 +1538,7 @@ mod tests {
         ] {
             fs::write(
                 &locator.ManifestPath,
-                format!("<package><metadata><id>sidenote</id><version>{installed}</version><channel>{}</channel></metadata></package>", channel_name(default)),
+                format!("<package><metadata><id>sidenote</id><version>{installed}</version><mainExe>sidenote.exe</mainExe><channel>{}</channel></metadata></package>", channel_name(default)),
             )
             .unwrap();
             if let Some(choice) = choice {
