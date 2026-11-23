@@ -13,6 +13,7 @@ import re
 import stat
 import sys
 from pathlib import Path
+import runpy
 
 HEX_MEETINGS = Path(os.environ["APPDATA"]) / "hex" / "meetings"
 LINE = re.compile(r"^\[(\d+):(\d+):(\d+)(?:\.(\d+))?\] (\S+) \(([^)]*)\): ?(.*)$")
@@ -453,5 +454,8 @@ def render(meeting):
 
 if __name__ == "__main__":
     targets = [p.parent for p in HEX_MEETINGS.glob("*/english-summary.json")] if sys.argv[1:] == ["--all"] else sys.argv[1:]
+    guarded_meeting = runpy.run_path(Path(__file__).with_name("hex-pipeline-run.py"))["guarded_meeting"]
+    render_claimed = guarded_meeting(render)
     for meeting in targets:
-        print(f"Meeting page: {render(meeting)}")
+        if (page_path := render_claimed(meeting)) is not None:
+            print(f"Meeting page: {page_path}")
