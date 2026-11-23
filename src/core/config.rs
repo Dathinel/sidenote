@@ -247,6 +247,8 @@ pub struct Config {
     pub labs: super::meeting_watch::Labs,
     #[serde(default)]
     pub meeting_icon_in_captures: bool,
+    #[serde(default = "meeting_icon_default")]
+    pub meeting_icon_enabled: bool,
     #[serde(default)]
     pub knowledge_base: KnowledgeBase,
     #[serde(default)]
@@ -259,6 +261,10 @@ pub struct Config {
     baseline: Option<serde_json::Value>,
 }
 
+fn meeting_icon_default() -> bool {
+    true
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -267,6 +273,7 @@ impl Default for Config {
             features: Features::default(),
             labs: super::meeting_watch::Labs::default(),
             meeting_icon_in_captures: false,
+            meeting_icon_enabled: meeting_icon_default(),
             knowledge_base: KnowledgeBase::default(),
             pipeline: super::meeting_router::RoutingConfig::default(),
             notes: None,
@@ -356,10 +363,30 @@ impl Config {
     #[cfg(feature = "desktop")]
     pub fn meeting_icon_capture_allowed(root: &Path) -> bool {
         // The native window timer must fail closed on sharing errors without retrying.
-        std::fs::read(root.join("config.json"))
-            .ok()
-            .and_then(|bytes| Self::decode(&bytes).ok())
-            .is_some_and(|config| config.version == 1 && config.meeting_icon_in_captures)
+        Self::meeting_icon_settings(root).1
+    }
+
+    #[cfg(feature = "desktop")]
+    pub fn meeting_icon_settings(root: &Path) -> (bool, bool) {
+        match std::fs::read(root.join("config.json")) {
+            Ok(bytes) => Self::decode(&bytes)
+                .ok()
+                .filter(|config| config.version == 1)
+                .map_or((false, false), |config| {
+                    (config.meeting_icon_enabled, config.meeting_icon_in_captures)
+                }),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => (meeting_icon_default(), false),
+            Err(_) => (false, false),
+        }
+    }
+
+    #[cfg(feature = "desktop")]
+    pub fn toggle_meeting_icon(root: &Path) -> io::Result<Self> {
+        let _lock = lock(root)?;
+        let mut config = Self::load_existing(root)?;
+        config.meeting_icon_enabled = !config.meeting_icon_enabled;
+        config.save_locked(root)?;
+        Ok(config)
     }
 
     #[cfg(feature = "desktop")]
@@ -745,6 +772,27 @@ mod tests {
         let _lock = store_io::lock(&root.path().join("local/config.lock")).unwrap();
         let error = Config::load_in(root.path()).err().unwrap();
         assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+    }
+
+    #[test]
+    #[cfg(feature = "desktop")]
+    fn meeting_icon_visibility_defaults_on_and_saves_under_the_writer_lock() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        assert_eq!(Config::meeting_icon_settings(root), (true, false));
+        let path = root.join("config.json");
+        std::fs::write(&path, br#"{"version":1,"features":{},"notes":{}}"#).unwrap();
+        assert_eq!(Config::meeting_icon_settings(root), (true, false));
+        Config::toggle_meeting_icon(root).unwrap();
+        assert_eq!(Config::meeting_icon_settings(root), (false, false));
+        let writer = lock(root).unwrap();
+        assert!(Config::toggle_meeting_icon(root).is_err());
+        assert_eq!(Config::meeting_icon_settings(root), (false, false));
+        drop(writer);
+        Config::toggle_meeting_icon(root).unwrap();
+        assert_eq!(Config::meeting_icon_settings(root), (true, false));
+        std::fs::write(path, b"invalid").unwrap();
+        assert_eq!(Config::meeting_icon_settings(root), (false, false));
     }
 
     #[test]

@@ -469,7 +469,7 @@ pub(crate) fn row_icon(key: &str) -> &'static rune::Icon {
         "feature-Tasks" => &icons::LIST_TODO,
         "feature-Projects" => &icons::FOLDERS,
         "feature-Other devices" => &icons::RADIO_TOWER,
-        "this-pc-name" => &icons::MONITOR,
+        "this-pc-name" | "meeting-icon-visibility" => &icons::MONITOR,
         "connect-Claude Code" => &icons::CONNECTED,
         "connect-Claude Desktop" => &icons::MONITOR,
         "connect-Codex" => &icons::APP_WINDOW,
@@ -2383,6 +2383,38 @@ fn knowledge_base(s: &State, k: &Kit, p: Palette) -> El {
     settings_card("Knowledge base", body, p).key("knowledge-base")
 }
 
+const MEETING_ICON_VISIBILITY_ERROR: &str = "Could not save whether to show the meeting icon.";
+
+fn meeting_icon_visibility(s: &State, k: &Kit, p: Palette) -> El {
+    let label = "Show the meeting icon";
+    let help = match s.feature_error.as_deref() {
+        Some(MEETING_ICON_VISIBILITY_ERROR) => MEETING_ICON_VISIBILITY_ERROR,
+        _ => "Show a small icon at the screen edge while a meeting records.",
+    };
+    setting_row(
+        s,
+        "meeting-icon-visibility",
+        label,
+        help,
+        Switch::new(sidenote::core::Config::meeting_icon_settings(&s.store.root).0)
+            .label(label)
+            .hide_label()
+            .on_toggle(|s: &mut State| {
+                match sidenote::core::Config::toggle_meeting_icon(&s.store.root) {
+                    Ok(config) => {
+                        s.config = config;
+                        s.feature_error = None;
+                    }
+                    Err(_) => s.feature_error = Some(MEETING_ICON_VISIBILITY_ERROR.into()),
+                }
+            })
+            .build(k)
+            .key("meeting-icon-visibility-toggle"),
+        true,
+        p,
+    )
+}
+
 fn meeting_icon_capture(s: &State, k: &Kit, p: Palette) -> El {
     setting_row(
         s,
@@ -2422,7 +2454,13 @@ fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, page: Page, tab: us
         (Page::General, _) => col()
             .w_full()
             .child(ai_notes::section(s, k, p, ai_notes::Part::Identity))
-            .children(cfg!(windows).then(|| card("Meeting icon", meeting_icon_capture(s, k, p), p)))
+            .child(card(
+                "Meeting icon",
+                col()
+                    .child(meeting_icon_visibility(s, k, p))
+                    .children(cfg!(windows).then(|| meeting_icon_capture(s, k, p))),
+                p,
+            ))
             .child(card(
                 "Sidebar features",
                 col()
@@ -2744,7 +2782,9 @@ pub fn pane(s: &State, k: &Kit, p: Palette, _narrow: bool, layer: &mut Vec<El>) 
     if let Some(problem) = s.hex.settings_note {
         doc = doc.child(note(problem, p));
     }
-    if let Some(problem) = &s.feature_error {
+    if let Some(problem) = &s.feature_error
+        && (page != Page::General || problem != MEETING_ICON_VISIBILITY_ERROR)
+    {
         doc = doc.child(roles::SMALL.wrap(problem, p.warn).role("alert"));
     }
     // The section controls above always need their sections, so the body shows in every state.
