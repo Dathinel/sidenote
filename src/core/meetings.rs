@@ -3,6 +3,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::sync::LazyLock;
 use std::{
+    collections::BTreeSet,
     fs, io,
     path::{Path, PathBuf},
 };
@@ -235,9 +236,13 @@ pub fn pending_quick_title(
     since_ms: i64,
     known: &std::collections::HashSet<String>,
 ) -> Option<String> {
+    let suppressed = super::meeting_delete::suppressed_ids(&state_dir()).ok()?;
     let mut best: Option<(i64, String)> = None;
     for entry in super::file_reads::dir_iter(local).ok()?.flatten() {
         let id = entry.file_name().to_string_lossy().into_owned();
+        if suppressed.contains(&id) {
+            continue;
+        }
         let Some(made) = id.split('-').next().and_then(|n| n.parse::<i64>().ok()) else {
             continue;
         };
@@ -645,19 +650,154 @@ impl Meeting {
             .unwrap_or_default()
     }
 }
+
+pub fn recycle_meeting(
+    meeting: &Meeting,
+    unsaved_notes: bool,
+) -> Result<String, super::meeting_delete::DeleteError> {
+    use super::meeting_delete::{DeleteError, Eligibility};
+    if meeting.device.is_some() {
+        return Err(DeleteError::Refused(Eligibility::Peer));
+    }
+    let state = state_dir();
+    let meetings = meetings_dir();
+    if meeting.folder != meetings.join(&meeting.id)
+        && meeting.folder != super::meeting_parts::inputs(&state).join(&meeting.id)
+    {
+        return Err(super::store_io::invalid("Unknown meeting source").into());
+    }
+    recycle_meeting_in(
+        &state,
+        &meetings,
+        &meeting.id,
+        meeting.title.clone(),
+        unsaved_notes,
+        || crate::hex_engine::listener_status().ok(),
+    )
+}
+
+fn recycle_meeting_in(
+    state: &Path,
+    meetings: &Path,
+    id: &str,
+    title: String,
+    unsaved_notes: bool,
+    status: impl FnOnce() -> Option<serde_json::Value>,
+) -> Result<String, super::meeting_delete::DeleteError> {
+    use super::meeting_delete::{DeleteError, Eligibility, Storage};
+    if unsaved_notes {
+        return Err(DeleteError::Refused(Eligibility::UnsavedNotes));
+    }
+    let storage = Storage::new(meetings, state)?;
+    let settle = super::settle::Store::new(state.to_owned(), meetings.to_owned());
+    let mut claims = (None, None, None);
+    storage.delete(
+        id,
+        title,
+        chrono::Utc::now().timestamp_millis(),
+        |ids| {
+            let status = status().unwrap_or_default();
+            let owner = status["id"].as_str();
+            let selected = owner.is_none_or(|id| ids.contains(id));
+            let eligibility = match status["meeting_state"].as_str() {
+                _ if status["protocol"] != 4 => Eligibility::Recording,
+                Some("starting") => Eligibility::Recording,
+                Some("recording") if selected => Eligibility::Recording,
+                Some("paused") if selected => Eligibility::Paused,
+                Some("finishing" | "stopping" | "transcribing") if selected => {
+                    Eligibility::Processing
+                }
+                Some(
+                    "recording" | "paused" | "finishing" | "stopping" | "transcribing" | "idle"
+                    | "stopped" | "finished" | "complete",
+                ) => Eligibility::Ready,
+                _ => Eligibility::Recording,
+            };
+            if eligibility != Eligibility::Ready {
+                return Ok(eligibility);
+            }
+            for session in super::meeting_parts::list(state)? {
+                if session.pending_start_ms.is_some() {
+                    return Ok(Eligibility::Recording);
+                }
+                if ids.contains(&session.id) {
+                    match session.phase {
+                        super::meeting_parts::Phase::Recording => {
+                            return Ok(Eligibility::Recording);
+                        }
+                        super::meeting_parts::Phase::Paused => return Ok(Eligibility::Paused),
+                        super::meeting_parts::Phase::Ended => {}
+                    }
+                }
+            }
+            for id in ids {
+                if super::notes::queue::recycle_busy(state, id)?
+                    || super::meeting_router::jobs::recycle_busy(state, id)?
+                {
+                    return Ok(Eligibility::Processing);
+                }
+                for root in [meetings.to_owned(), super::meeting_parts::inputs(state)] {
+                    let folder = root.join(id);
+                    if folder.join("final.pending").try_exists()?
+                        || super::meeting_delete::lock_busy(&folder.join(".notes-engine.lock"))?
+                    {
+                        return Ok(Eligibility::Processing);
+                    }
+                }
+            }
+            if let (Some(live), Some(settle)) =
+                (super::live::recycle_claim(), settle.recycle_claim(ids)?)
+            {
+                let scripts =
+                    match super::store_io::try_lock(&state.join("local/notes-script.lock")) {
+                        Ok(lock) => lock,
+                        Err(e) if super::meeting_delete::busy(&e) => {
+                            return Ok(Eligibility::Processing);
+                        }
+                        Err(e) => return Err(e),
+                    };
+                let _ = claims.0.insert(live);
+                let _ = claims.1.insert(settle);
+                let _ = claims.2.insert(scripts);
+                Ok(Eligibility::Ready)
+            } else {
+                Ok(Eligibility::Processing)
+            }
+        },
+        |_| Ok(()),
+    )
+}
+
 pub fn scan() -> (Vec<Meeting>, Vec<String>) {
-    let (mut meetings, mut errors) = scan_sources(&meetings_dir(), &peers_dir());
-    match super::meeting_parts::list(&state_dir()) {
+    let state = state_dir();
+    let (meetings, mut errors) = scan_catalog(&state, &meetings_dir(), &peers_dir());
+    if !super::file_reads::refreshing() {
+        errors.extend(super::sync_state::reconcile(&state));
+    }
+    (meetings, errors)
+}
+
+const SUPPRESSION_ERROR: &str = "Could not read deleted meeting IDs";
+
+pub fn scan_catalog(state: &Path, local: &Path, peers: &Path) -> (Vec<Meeting>, Vec<String>) {
+    let Ok(suppressed) = super::meeting_delete::suppressed_ids(state) else {
+        return (vec![], vec![SUPPRESSION_ERROR.into()]);
+    };
+    let (mut meetings, mut errors) = scan_sources_filtered(state, local, peers, &suppressed);
+    match super::meeting_parts::list(state) {
         Ok(parts) => {
             meetings.retain(|m| {
                 m.device.is_some() || !parts.iter().any(|s| s.parts.iter().any(|p| p.id == m.id))
             });
             for session in parts {
-                let folder = super::meeting_parts::inputs(&state_dir()).join(&session.id);
+                if suppressed.contains(&session.id) {
+                    continue;
+                }
+                let folder = super::meeting_parts::inputs(state).join(&session.id);
                 if let Ok(mut m) = Meeting::load_pending(&folder) {
                     m.minutes = Some(session.elapsed_ms().div_ceil(60_000));
                     if session.phase != super::meeting_parts::Phase::Ended
-                        && let Ok(text) = session.view_text(&meetings_dir())
+                        && let Ok(text) = session.view_text(local)
                     {
                         m.lines = parse_transcript(&text);
                         m.transcript_raw = text;
@@ -669,17 +809,26 @@ pub fn scan() -> (Vec<Meeting>, Vec<String>) {
         }
         Err(_) => errors.push("Could not read meeting parts".into()),
     }
-    if !super::file_reads::refreshing() {
-        errors.extend(super::sync_state::reconcile(&state_dir()));
-    }
     (meetings, errors)
 }
 
 /// Local ids reserve their place even while a summary is arriving or cannot be read.
 pub fn scan_sources(local: &Path, peers: &Path) -> (Vec<Meeting>, Vec<String>) {
-    let (mut meetings, mut errors) = scan_in(local);
-    let mut ids: std::collections::BTreeSet<String> =
-        meetings.iter().map(|m| m.id.clone()).collect();
+    let state = state_dir();
+    let Ok(suppressed) = super::meeting_delete::suppressed_ids(&state) else {
+        return (vec![], vec![SUPPRESSION_ERROR.into()]);
+    };
+    scan_sources_filtered(&state, local, peers, &suppressed)
+}
+
+fn scan_sources_filtered(
+    state: &Path,
+    local: &Path,
+    peers: &Path,
+    suppressed: &BTreeSet<String>,
+) -> (Vec<Meeting>, Vec<String>) {
+    let (mut meetings, mut errors) = scan_in_filtered(state, local, true, suppressed);
+    let mut ids: BTreeSet<String> = meetings.iter().map(|m| m.id.clone()).collect();
     if let Ok(entries) = super::file_reads::dir_iter(local) {
         for entry in entries.take(super::file_reads::ENTRIES_MAX).flatten() {
             if super::file_reads::directory(&entry.path()) {
@@ -704,7 +853,8 @@ pub fn scan_sources(local: &Path, peers: &Path) -> (Vec<Meeting>, Vec<String>) {
                     .unwrap_or_default()
                     .to_string_lossy()
                     .into_owned();
-                let (peer_meetings, peer_errors) = scan_in_mode(&folder, false);
+                let (peer_meetings, peer_errors) =
+                    scan_in_filtered(state, &folder, false, suppressed);
                 errors.extend(
                     peer_errors
                         .into_iter()
@@ -729,6 +879,19 @@ pub fn scan_in(root: &Path) -> (Vec<Meeting>, Vec<String>) {
     scan_in_mode(root, true)
 }
 pub(super) fn scan_in_mode(root: &Path, pending: bool) -> (Vec<Meeting>, Vec<String>) {
+    let state = state_dir();
+    let Ok(suppressed) = super::meeting_delete::suppressed_ids(&state) else {
+        return (vec![], vec![SUPPRESSION_ERROR.into()]);
+    };
+    scan_in_filtered(&state, root, pending, &suppressed)
+}
+
+fn scan_in_filtered(
+    state: &Path,
+    root: &Path,
+    pending: bool,
+    suppressed: &BTreeSet<String>,
+) -> (Vec<Meeting>, Vec<String>) {
     let mut meetings = Vec::new();
     let mut errors = Vec::new();
     match super::file_reads::dir_iter(root) {
@@ -746,7 +909,7 @@ pub(super) fn scan_in_mode(root: &Path, pending: bool) -> (Vec<Meeting>, Vec<Str
                     continue;
                 }
                 let id = entry.file_name().to_string_lossy().into_owned();
-                if super::recording_guard::hidden(&state_dir(), &folder, &id) {
+                if suppressed.contains(&id) || super::recording_guard::hidden(state, &folder, &id) {
                     continue;
                 }
                 let saved = folder.join("english-summary.json").exists()
@@ -1024,5 +1187,105 @@ mod diary_title_tests {
             "11:00"
         );
         assert_eq!(diary_title(Some(" "), Some("user"), " Summary "), "Summary");
+    }
+}
+
+#[cfg(test)]
+mod recycle_tests {
+    use super::*;
+    use crate::core::meeting_delete::{DeleteError, Eligibility};
+
+    #[test]
+    fn busy_and_late_writers_cannot_recreate_recycled_state() {
+        let temp = tempfile::tempdir().unwrap();
+        let state = temp.path().join("state");
+        let meetings = temp.path().join("meetings");
+        let id = "100-1";
+        let source = meetings.join(id);
+        fs::create_dir_all(&source).unwrap();
+        fs::create_dir(&state).unwrap();
+        fs::write(source.join("manifest.json"), b"{\"status\":\"complete\"}").unwrap();
+        fs::write(source.join("transcript.ndjson"), b"synthetic").unwrap();
+        fs::write(source.join("notes.md"), b"synthetic sidecar").unwrap();
+        let attempt = || {
+            recycle_meeting_in(&state, &meetings, id, "Synthetic".into(), false, || {
+                Some(serde_json::json!({"protocol":4,"meeting_state":"idle"}))
+            })
+        };
+        let shared = crate::core::meeting_delete::claim_write(&state, id)
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            attempt(),
+            Err(DeleteError::Refused(Eligibility::Processing))
+        ));
+        drop(shared);
+        for path in [
+            "local/notes-jobs/100-1.lock",
+            "local/router-queue/100-1.lock",
+            "local/settle-log.lock",
+        ] {
+            let held = super::super::store_io::lock(&state.join(path)).unwrap();
+            assert!(matches!(
+                attempt(),
+                Err(DeleteError::Refused(Eligibility::Processing))
+            ));
+            drop(held);
+        }
+        let pending = state.join("local/router-queue/100-1.json");
+        fs::create_dir_all(pending.parent().unwrap()).unwrap();
+        fs::write(&pending, b"{}").unwrap();
+        assert!(matches!(
+            attempt(),
+            Err(DeleteError::Refused(Eligibility::Processing))
+        ));
+        fs::remove_file(pending).unwrap();
+        fs::write(source.join("final.pending"), b"").unwrap();
+        assert!(matches!(
+            attempt(),
+            Err(DeleteError::Refused(Eligibility::Processing))
+        ));
+        fs::remove_file(source.join("final.pending")).unwrap();
+        assert!(matches!(
+            recycle_meeting_in(&state, &meetings, id, String::new(), false, || None),
+            Err(DeleteError::Refused(Eligibility::Recording))
+        ));
+        let txn = attempt().unwrap();
+        assert_eq!(
+            fs::read(source.join("notes.md")).unwrap(),
+            b"synthetic sidecar"
+        );
+        let settings = crate::core::notes::NotesSettings::default();
+        super::super::notes::queue::enqueue_in(
+            &state,
+            &meetings,
+            id,
+            Some(super::super::notes::Request::MakeNotes),
+            &settings,
+        )
+        .unwrap();
+        super::super::meeting_router::jobs::enqueue_in(&state, &meetings, id).unwrap();
+        let settle = super::super::settle::Store::new(state.clone(), meetings.clone());
+        assert!(
+            settle
+                .publish_summary(id, &serde_json::json!({}), false)
+                .is_err()
+        );
+        assert!(super::super::recording_guard::keep_in(&state, id).is_err());
+        assert_eq!(
+            fs::read(source.join("notes.md")).unwrap(),
+            b"synthetic sidecar"
+        );
+        assert!(!state.join("local/notes-jobs/100-1.json").exists());
+        assert!(!state.join("local/router-queue/100-1.json").exists());
+        assert!(!state.join("local/recording-guard/100-1.json").exists());
+        super::super::meeting_delete::Storage::new(&meetings, &state)
+            .unwrap()
+            .restore(&txn)
+            .unwrap();
+        assert_eq!(
+            fs::read(source.join("transcript.ndjson")).unwrap(),
+            b"synthetic"
+        );
     }
 }

@@ -183,6 +183,9 @@ impl Options {
             prompt.push_str("\n</live_notes>\n");
         }
         if let Some(source) = &self.live {
+            let state = super::state_dir();
+            let suppressed = super::meeting_delete::suppressed_ids(&state)
+                .map_err(|_| "Could not read deleted meeting IDs. Try again.")?;
             let folder = live::find_folder(root, source.hint.as_deref(), source.start_ms);
             let folder = folder.or_else(|| {
                 if source.hint.is_some() {
@@ -195,11 +198,9 @@ impl Options {
             });
             prompt.push_str("\n<live_transcript>\n");
             if let Some(folder) = folder.filter(|folder| {
-                !super::recording_guard::hidden(
-                    &super::state_dir(),
-                    folder,
-                    &folder.file_name().unwrap_or_default().to_string_lossy(),
-                )
+                let id = folder.file_name().unwrap_or_default().to_string_lossy();
+                !suppressed.contains(id.as_ref())
+                    && !super::recording_guard::hidden(&state, folder, &id)
             }) {
                 match live::read_rolling(&folder, None)
                     .map_err(|_| "Could not read the live transcript. Try again.")?
@@ -249,8 +250,14 @@ fn recent_meeting_for(
     now_ms: i64,
     start_ms: Option<i64>,
 ) -> Option<(i64, LiveSource)> {
+    let state = super::state_dir();
+    let suppressed = super::meeting_delete::suppressed_ids(&state).ok()?;
     let entries = file_reads::entries(root).ok()?;
     let mut meetings = entries.iter().filter_map(|entry| {
+        let name = entry.file_name();
+        if suppressed.contains(name.to_string_lossy().as_ref()) {
+            return None;
+        }
         let folder = entry.path();
         if !file_reads::directory(&folder) {
             return None;

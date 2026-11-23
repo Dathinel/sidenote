@@ -121,7 +121,7 @@ impl Page {
     pub(in crate::ui) fn tabs(self) -> &'static [&'static str] {
         match self {
             Self::People => &["Our team", "External"],
-            Self::Meetings => &["Recording", "Summaries", "Tasks", "Engine"],
+            Self::Meetings => &["Recording", "Summaries", "Daily check", "Engine"],
             Self::Helpers => &["Agents", "Speech model"],
             _ => &[],
         }
@@ -1387,6 +1387,12 @@ fn list_row(glyph: &'static rune::Icon, name: &str, active: bool, p: Palette) ->
     .focus_ring(1.0, 0.0, p.line)
 }
 
+fn settings_back(p: Palette) -> El {
+    list_row(&icons::CHEVRON_LEFT, "Back", false, p)
+        .label("Back (Esc)")
+        .on_press(back)
+}
+
 fn settings_list(s: &State, k: &Kit, p: Palette, width: f32) -> El {
     let mut list = col()
         .w_full()
@@ -1394,12 +1400,7 @@ fn settings_list(s: &State, k: &Kit, p: Palette, width: f32) -> El {
         .px(8.0)
         .pt(12.0)
         .pb(8.0)
-        .child(
-            list_row(&icons::CHEVRON_LEFT, "Back", false, p)
-                .key("settings-back")
-                .label("Back (Esc)")
-                .on_press(back),
-        )
+        .child(settings_back(p).key("settings-back"))
         .child(
             TextInput::new(&s.hex.filter)
                 .leading_icon(&icons::SEARCH)
@@ -2399,6 +2400,7 @@ fn kb_save_error(error: &std::io::Error) -> String {
 }
 fn knowledge_base(s: &State, k: &Kit, p: Palette) -> El {
     let kb = edited_kb(s);
+    let field_kit = row_field_kit(k, p);
     let mut body = col()
         .w_full()
         .padding(16.0)
@@ -2422,21 +2424,27 @@ fn knowledge_base(s: &State, k: &Kit, p: Palette) -> El {
                 .label(label)
                 .auto_grow(2, 5)
                 .on_edit(move |s: &mut State| &mut s.hex.shell.kb_fields[index])
-                .build(k)
+                .build(&field_kit)
         } else {
             TextInput::new(&s.hex.shell.kb_fields[index])
                 .height(30.0)
                 .label(label)
                 .placeholder(if index == 1 { "origin/main" } else { "" })
                 .on_edit(move |s: &mut State| &mut s.hex.shell.kb_fields[index])
-                .build(&row_field_kit(k, p))
+                .build(&field_kit)
         };
         body = body.child(
             col()
                 .w_full()
                 .gap(5.0)
                 .child(roles::CONTROL.wrap(label, p.ink))
-                .child(control.key(format!("kb-field-{index}")).w_full().min_w(0.0)),
+                .child(
+                    control
+                        .key(format!("kb-field-{index}"))
+                        .w_full()
+                        .min_w(0.0)
+                        .border(1.0, field_kit.c.border_strong),
+                ),
         );
     }
     let reason = if kb.is_empty() {
@@ -2913,19 +2921,31 @@ pub fn pane(s: &State, k: &Kit, p: Palette, _narrow: bool, layer: &mut Vec<El>) 
                     .max_w(pane_width)
                     .px(gutter)
                     .children(narrow.then(|| {
-                        pressable(row().size(TAB_H, TAB_H).center().child(icons::draw(
-                            &icons::PANEL_OPEN,
-                            icons::ROW,
-                            p.soft,
-                        )))
-                        .key("settings-navigation")
-                        .label("Settings pages")
-                        .radius(7.0)
-                        .hover(p.chip)
-                        .focus_ring(1.0, 0.0, p.line)
-                        .expanded(drawer)
-                        .mt(12.0)
-                        .on_press(|s: &mut State| s.hex.shell.navigation_open = true)
+                        row()
+                            .w_full()
+                            .items_center()
+                            .justify_between()
+                            .mt(12.0)
+                            .child(
+                                settings_back(p)
+                                    .key("settings-header-back")
+                                    .w(76.0)
+                                    .fill(Color::TRANSPARENT),
+                            )
+                            .child(
+                                pressable(row().size(TAB_H, TAB_H).center().child(icons::draw(
+                                    &icons::PANEL_OPEN,
+                                    icons::ROW,
+                                    p.soft,
+                                )))
+                                .key("settings-navigation")
+                                .label("Settings pages")
+                                .radius(7.0)
+                                .hover(p.chip)
+                                .focus_ring(1.0, 0.0, p.line)
+                                .expanded(drawer)
+                                .on_press(|s: &mut State| s.hex.shell.navigation_open = true),
+                            )
                     }))
                     .children(
                         s.hex
@@ -3581,7 +3601,7 @@ mod tests {
         assert!(jump_groups(Page::Meetings, 0).is_empty());
         assert_eq!(
             Page::Meetings.tabs(),
-            ["Recording", "Summaries", "Tasks", "Engine"]
+            ["Recording", "Summaries", "Daily check", "Engine"]
         );
         assert_eq!(current(Page::Meetings.section(3)), (Page::Meetings, 3));
         assert_eq!(jump_groups(Page::Hex, 0).len(), 7);

@@ -141,12 +141,29 @@ impl Store {
     fn lock(&self) -> io::Result<fs::File> {
         store_io::lock(&self.root.join("local/settle-log.lock"))
     }
+    pub(super) fn recycle_claim(&self, ids: &BTreeSet<String>) -> io::Result<Option<fs::File>> {
+        let lock = match store_io::try_lock(&self.root.join("local/settle-log.lock")) {
+            Ok(lock) => lock,
+            Err(e) if super::meeting_delete::busy(&e) => return Ok(None),
+            Err(e) => return Err(e),
+        };
+        for intent in self.intents()? {
+            if ids.contains(&intent.mutation.meeting) && self.outcome(&intent)?.is_none() {
+                return Ok(None);
+            }
+        }
+        Ok(Some(lock))
+    }
+
     fn source(&self, meeting: &str, kind: &FileKind) -> io::Result<PathBuf> {
         if !valid_id(meeting) {
             return Err(invalid("Invalid source meeting"));
         }
         let folder = self.meetings.join(meeting);
-        if !super::file_reads::directory(&folder) || !folder.join("manifest.json").is_file() {
+        if super::meeting_delete::suppressed_ids(&self.root)?.contains(meeting)
+            || !super::file_reads::directory(&folder)
+            || !folder.join("manifest.json").is_file()
+        {
             return Err(invalid("This meeting was deleted. Nothing was changed."));
         }
         Ok(folder.join(match kind {

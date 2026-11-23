@@ -43,6 +43,9 @@ try {
     foreach ($dir in $directories | Sort-Object Name) {
         $failed = $null
         if (($ownedParts.ContainsKey($dir.Name) -and $null -eq $allowed) -or (Test-PendingPart $dir)) { continue }
+        $recycleClaim = Enter-MeetingRecycleClaim $dir.FullName
+        if ($null -eq $recycleClaim) { continue }
+        try {
         $manifestPath = Join-Path $dir.FullName 'manifest.json'
         if (-not (Test-Path -LiteralPath $manifestPath)) { continue }
         if (Test-Path -LiteralPath (Join-Path $dir.FullName 'english-summary.json')) { continue }
@@ -121,6 +124,7 @@ try {
             Add-Content -LiteralPath $failed -Value "try $(Get-Date -Format s): $safe" -Encoding utf8
             Log $safe
         }
+        } finally { $recycleClaim.Dispose() }
     }
 } finally { $mutex.ReleaseMutex() }
 
@@ -133,6 +137,8 @@ if ($titleMutex.WaitOne(0)) {
     try {
         foreach ($dir in $directories | Where-Object { $_.LastWriteTime -gt (Get-Date).AddDays(-2) } | Sort-Object Name) {
             if (($ownedParts.ContainsKey($dir.Name) -and $null -eq $allowed) -or (Test-PendingPart $dir)) { continue }
+            $recycleClaim = Enter-MeetingRecycleClaim $dir.FullName
+            if ($null -eq $recycleClaim) { continue }
             $titleClock = [Diagnostics.Stopwatch]::StartNew()
             try {
                 $quick = Join-Path $dir.FullName 'quick-title.json'
@@ -147,6 +153,7 @@ if ($titleMutex.WaitOne(0)) {
                 & (Join-Path $PSScriptRoot 'hex-meeting-quick-title.ps1') -MeetingDir $dir.FullName *>&1 | Out-Null
                 if (-not (Test-Path -LiteralPath $quick)) { Add-Content -LiteralPath $quickFailed -Value "try $(Get-Date -Format s)" -Encoding utf8 }
             } catch { Log (Get-PipelineFailure $_ 'title' 60 $titleClock.Elapsed.TotalSeconds) }
+            finally { $recycleClaim.Dispose() }
         }
     } finally { $titleMutex.ReleaseMutex() }
 }
