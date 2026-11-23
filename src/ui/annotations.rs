@@ -11,7 +11,7 @@ use rune_kit::{Menu, MenuItem, Placement, TextArea};
 use sidenote::{
     core::{
         annotations::{
-            self, Capture, Keyframe, Mark, Scan,
+            self, Capture, Keyframe, Mark, Scan, Word,
             generation::{self, Epoch, Progress, Ticket},
             media::{self, ApprovedCapture, ReviewFrame},
             note,
@@ -495,6 +495,48 @@ fn number(n: usize, p: Palette) -> El {
         .fill(p.ink)
         .child(roles::CAPTION.line(n.to_string(), p.card))
 }
+fn words_text(words: &[&Word]) -> String {
+    words
+        .iter()
+        .map(|w| w.text.as_str())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+fn callout(c: &Capture, n: usize, mark: &Mark, p: Palette) -> El {
+    let words = c.words_for_mark(mark);
+    let description = mark
+        .description
+        .as_deref()
+        .filter(|d| !d.is_empty())
+        .unwrap_or("Mark without a description");
+    let mut content = col().w_full().min_w(0.0).gap(7.0).child(
+        row()
+            .gap(8.0)
+            .items_center()
+            .child(number(n, p))
+            .child(roles::NAME.wrap(description, p.ink).grow(1.0).min_w(0.0)),
+    );
+    if let (Some(first), Some(last)) = (words.first(), words.last()) {
+        content = content
+            .child(roles::META.wrap(
+                format!("Words nearby, {} to {}", time(first.t0), time(last.t1)),
+                p.faint,
+            ))
+            .child(
+                roles::SMALL
+                    .wrap(words_text(&words), p.ink)
+                    .selectable(true),
+            );
+    } else {
+        content = content.child(roles::SMALL.wrap("No timed words near this mark.", p.soft));
+    }
+    content
+        .key(format!("annotation-callout-{n}"))
+        .padding(12.0)
+        .radius(8.0)
+        .border(1.0, p.line)
+        .fill(p.card)
+}
 fn step_excerpt<'a>(c: &Capture, mark: &'a Mark) -> Option<(&'a str, String)> {
     let heading = mark.description.as_deref()?.trim();
     if heading.is_empty() {
@@ -516,6 +558,17 @@ fn step_excerpt<'a>(c: &Capture, mark: &'a Mark) -> Option<(&'a str, String)> {
         .join(" ");
     (!excerpt.is_empty()).then_some((heading, excerpt))
 }
+fn mark_badge(n: usize) -> El {
+    col()
+        .size(22.0, 22.0)
+        .center()
+        .radius(11.0)
+        .fill(Color::BLACK)
+        .border(1.5, Color::WHITE)
+        .child(roles::CAPTION.line(n.to_string(), Color::WHITE))
+        .label(format!("Mark {n}"))
+}
+
 fn frame_image(
     s: &State,
     c: &Capture,
@@ -596,19 +649,12 @@ fn frame_image(
                     ),
             );
             canvas = canvas.child(
-                col()
+                mark_badge(i + 1)
                     .key(format!("annotation-badge-{}", i + 1))
-                    .size(22.0, 22.0)
                     .absolute(
                         (x * width - 11.0).clamp(0.0, (width - 22.0).max(0.0)),
                         (y * height - 11.0).clamp(0.0, (height - 22.0).max(0.0)),
-                    )
-                    .center()
-                    .radius(11.0)
-                    .fill(Color::BLACK)
-                    .border(1.5, Color::WHITE)
-                    .child(roles::CAPTION.line((i + 1).to_string(), Color::WHITE))
-                    .label(format!("Mark {}", i + 1)),
+                    ),
             );
         }
     }
@@ -823,7 +869,15 @@ fn capture_page(s: &State, c: &Capture, width: f32, p: Palette, layer: &mut Vec<
                         .w_full()
                         .gap(4.0)
                         .key(format!("annotation-callout-{}", i + 1))
-                        .child(roles::TITLE.wrap(heading, p.ink).role("heading"))
+                        .child(
+                            row().items_start().gap(8.0).child(mark_badge(i + 1)).child(
+                                roles::TITLE
+                                    .wrap(heading, p.ink)
+                                    .grow(1.0)
+                                    .min_w(0.0)
+                                    .role("heading"),
+                            ),
+                        )
                         .child(roles::READ.wrap(excerpt, p.body).selectable(true)),
                 );
             }
