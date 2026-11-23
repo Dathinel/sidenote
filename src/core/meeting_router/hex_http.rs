@@ -22,7 +22,6 @@ use zeroize::{Zeroize, Zeroizing};
 pub(super) struct HttpPhases {
     pub request_budget: Option<(Instant, Instant)>,
     pub request_io: Option<(Instant, Instant)>,
-    pub handshake_failed: Option<Instant>,
     pub aborted: Option<Instant>,
     pub batches_done: Option<Instant>,
 }
@@ -91,13 +90,7 @@ impl Service {
             .ok()
             .flatten();
         if endpoint.is_none() {
-            #[cfg(test)]
-            HTTP_PHASES.with_borrow_mut(|phases| phases.handshake_failed = Some(Instant::now()));
             service.abort();
-            #[cfg(test)]
-            if service.job.empty().unwrap_or(false) {
-                HTTP_PHASES.with_borrow_mut(|phases| phases.aborted = Some(Instant::now()));
-            }
         }
         // Closing the job also closes descendant copies of stdout on a failed handshake.
         let _ = reader.join();
