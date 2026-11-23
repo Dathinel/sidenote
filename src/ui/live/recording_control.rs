@@ -96,7 +96,7 @@ pub(in crate::ui) fn parts_control(s: &State, k: &Kit, p: Palette, layer: &mut V
         .h(44.0)
         .min_w(56.0)
         .radius(22.0)
-        .fill(p.card)
+        .fill(if recording { p.chip } else { p.card })
         .border(1.0, p.line)
         .shadow(3.0, 16.0, p.shadow)
         .child(transcript);
