@@ -8,15 +8,23 @@ use std::{
 
 pub struct Discovery {
     root: PathBuf,
+    state: Option<PathBuf>,
     validated: BTreeMap<String, (String, bool)>,
 }
 impl Discovery {
     pub(crate) fn configured(root: PathBuf) -> Self {
         Self {
             root,
+            state: None,
             validated: BTreeMap::new(),
         }
     }
+    #[cfg(any(windows, test))]
+    pub(crate) fn suppress_in(mut self, state: PathBuf) -> Self {
+        self.state = Some(state);
+        self
+    }
+
     /// An explicitly selected meetings folder, e.g. Sidenote's --meetings-dir.
     pub fn new(meetings: PathBuf) -> Result<Self, Error> {
         if !meetings.is_absolute() || meetings.components().any(|c| c == Component::ParentDir) {
@@ -44,6 +52,13 @@ impl Source for Discovery {
         delivered: &BTreeMap<String, String>,
     ) -> Result<CatchUp, Error> {
         let _stage = crate::core::idle_pass::Span::begin("source_discovery");
+        let suppressed = self
+            .state
+            .as_deref()
+            .map(crate::core::meeting_delete::suppressed_ids)
+            .transpose()
+            .map_err(|e| Error::Input(e.kind()))?
+            .unwrap_or_default();
         let scan = MeetingScan::open(&self.root).map_err(|e| match e.kind() {
             io::ErrorKind::NotFound => Error::Offline,
             kind => Error::Input(kind),
@@ -56,6 +71,9 @@ impl Source for Discovery {
                 continue;
             };
             ids.insert(id.to_owned());
+            if suppressed.contains(id) {
+                continue;
+            }
             let before = if let Some(directory) = scan.metadata.get(name) {
                 revision::input_with_metadata(&self.root.join(id), &root_meta, directory)
             } else {
@@ -117,6 +135,35 @@ mod tests {
     use super::*;
     use crate::core::recording_source::Session;
     use std::fs;
+
+    #[test]
+    fn suppressed_hex_input_is_not_rediscovered_until_restore() {
+        use crate::core::meeting_delete::{Eligibility, Storage};
+        let root = tempfile::tempdir().unwrap();
+        let meetings = root.path().join("meetings");
+        let state = root.path().join("state");
+        let folder = meetings.join("100-1");
+        fs::create_dir_all(&folder).unwrap();
+        fs::create_dir(&state).unwrap();
+        fs::write(folder.join("manifest.json"), br#"{"status":"complete"}"#).unwrap();
+        fs::write(folder.join("transcript.ndjson"), br#"{"text":"Synthetic"}"#).unwrap();
+        let mut discovery = Discovery::configured(meetings.clone()).suppress_in(state.clone());
+        assert_eq!(discovery.poll().unwrap().len(), 1);
+        let storage = Storage::new(&meetings, &state).unwrap();
+        let transaction = storage
+            .delete(
+                "100-1",
+                String::new(),
+                1,
+                |_| Ok(Eligibility::Ready),
+                |_| Ok(()),
+            )
+            .unwrap();
+        assert!(folder.join("transcript.ndjson").exists());
+        assert!(discovery.poll().unwrap().is_empty());
+        storage.restore(&transaction).unwrap();
+        assert_eq!(discovery.poll().unwrap().len(), 1);
+    }
 
     #[test]
     fn unchanged_unacknowledged_folders_do_not_reread_inputs() {

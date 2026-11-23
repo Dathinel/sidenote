@@ -170,17 +170,37 @@ impl Data {
         }
     }
 }
-pub(super) fn retain_catalog(current: &[Meeting], incoming: &mut Vec<Meeting>, failed: &[PathBuf]) {
+pub(super) fn retain_catalog(
+    current: &[Meeting],
+    incoming: &mut Vec<Meeting>,
+    failed: &[PathBuf],
+) -> bool {
+    retain_catalog_in(&core::state_dir(), current, incoming, failed)
+}
+
+fn retain_catalog_in(
+    state: &Path,
+    current: &[Meeting],
+    incoming: &mut Vec<Meeting>,
+    failed: &[PathBuf],
+) -> bool {
+    let Ok(suppressed) = core::meeting_delete::suppressed_ids(state) else {
+        incoming.clear();
+        return false;
+    };
+    incoming.retain(|meeting| !suppressed.contains(&meeting.id));
     for old in current {
-        if failed
-            .iter()
-            .any(|p| old.folder.starts_with(p) || p.starts_with(&old.folder))
+        if !suppressed.contains(&old.id)
+            && failed
+                .iter()
+                .any(|p| old.folder.starts_with(p) || p.starts_with(&old.folder))
             && !incoming.iter().any(|m| m.folder == old.folder)
         {
             incoming.push(old.clone());
         }
     }
     incoming.sort_by(|a, b| b.started.cmp(&a.started).then(b.id.cmp(&a.id)));
+    true
 }
 #[derive(PartialEq, Eq)]
 pub(super) struct Metadata {
@@ -269,6 +289,10 @@ pub(super) fn metadata() -> Metadata {
             .flatten(),
     };
     let root = core::state_dir();
+    let suppression = root.join("local/deleted-meeting-ids.json");
+    if let Ok(m) = core::file_reads::checked_metadata(&suppression) {
+        out.files.push((suppression, m.len(), m.modified().ok()));
+    }
     for folder in [
         root.join("state"),
         root.join("memory"),
@@ -498,3 +522,48 @@ pub(super) fn observing_handle() -> (Handle, Arc<AtomicBool>) {
 #[cfg(test)]
 #[path = "final_refresh_proofs.rs"]
 mod final_refresh_proofs;
+
+#[cfg(test)]
+mod recycle_tests {
+    use super::*;
+
+    #[test]
+    fn stale_refresh_cannot_admit_or_retain_deleted_meetings() {
+        use sidenote::core::meeting_delete::{Eligibility, Storage};
+        let temp = tempfile::tempdir().unwrap();
+        let state = temp.path().join("state");
+        let local = temp.path().join("meetings");
+        let folder = local.join("100-1");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::create_dir(&state).unwrap();
+        std::fs::write(folder.join("manifest.json"), br#"{"status":"complete"}"#).unwrap();
+        let initial = Meeting::load_pending(&folder).unwrap();
+        let generation = core::mutation_generation();
+        let storage = Storage::new(&local, &state).unwrap();
+        let id = storage
+            .delete(
+                "100-1",
+                "Synthetic".into(),
+                1,
+                |_| Ok(Eligibility::Ready),
+                |_| Ok(()),
+            )
+            .unwrap();
+        assert_ne!(core::mutation_generation(), generation);
+        let mut incoming = vec![initial.clone()];
+        assert!(retain_catalog_in(
+            &state,
+            &[initial],
+            &mut incoming,
+            &[folder]
+        ));
+        assert!(incoming.is_empty());
+        storage.restore(&id).unwrap();
+        assert_eq!(
+            core::scan_catalog(&state, &local, &temp.path().join("peers"))
+                .0
+                .len(),
+            1
+        );
+    }
+}

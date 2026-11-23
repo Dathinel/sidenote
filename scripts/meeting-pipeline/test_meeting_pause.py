@@ -1,4 +1,4 @@
-﻿"""Exercise the scheduled and explicit script entry with made-up folders only."""
+"""Exercise the scheduled and explicit script entry with made-up folders only."""
 import json
 import os
 from pathlib import Path
@@ -9,6 +9,13 @@ import unittest
 
 SOURCE = Path(__file__).with_name('hex-meeting-watch.ps1')
 
+def fixture_cli(scripts, overrides):
+    cli = SOURCE.with_name('hex-pipeline-cli.ps1')
+    contract = SOURCE.with_name('job-contract.json')
+    shutil.copy2(contract, scripts / contract.name)
+    (scripts / cli.name).write_text(cli.read_text() + '\n' + overrides)
+
+
 class MeetingPause(unittest.TestCase):
     def test_paused_parts_are_held_and_explicit_joined_folder_is_used(self):
         with tempfile.TemporaryDirectory(prefix='sidenote-pause-script-') as tmp:
@@ -16,7 +23,7 @@ class MeetingPause(unittest.TestCase):
             scripts = root / 'scripts'
             scripts.mkdir()
             shutil.copy2(SOURCE, scripts / SOURCE.name)
-            (scripts / 'hex-pipeline-cli.ps1').write_text(
+            fixture_cli(scripts,
                 "function Get-ScriptsNotesEngine { 'scripts' }\n"
                 "function Get-PipelineFailure { 'synthetic pipeline failure' }\n")
             (scripts / 'hex-meeting-english.ps1').write_text(
@@ -70,7 +77,7 @@ class MeetingPause(unittest.TestCase):
             scripts.mkdir()
             source=SOURCE.with_name('hex-meeting-english.ps1')
             shutil.copy2(source,scripts/source.name)
-            (scripts/'hex-pipeline-cli.ps1').write_text(r"""
+            fixture_cli(scripts, r"""
 $script:JobContract=[pscustomobject]@{preserve_completed=$true;summary_file='english-summary.json'}
 function Get-ScriptsNotesEngine { 'scripts' }
 function Enter-NotesEngine($folder) { [IO.File]::Open((Join-Path $folder 'synthetic.lock'),[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None) }
@@ -115,7 +122,7 @@ Copy-Item -LiteralPath $InputFile -Destination (Join-Path $MeetingDir 'notes-req
         with tempfile.TemporaryDirectory(prefix='sidenote-part-cache-') as tmp:
             root=Path(tmp); scripts=root/'scripts'; scripts.mkdir(); folder=root/'100-1'; folder.mkdir()
             source=SOURCE.with_name('hex-meeting-english.ps1'); shutil.copy2(source,scripts/source.name)
-            (scripts/'hex-pipeline-cli.ps1').write_text("function Get-ScriptsNotesEngine { 'scripts' }\nfunction Get-PipelineFailure($record) { $record.Exception.Message }\nfunction Enter-NotesEngine { throw 'A cached part must not start work' }\n")
+            fixture_cli(scripts, "function Get-ScriptsNotesEngine { 'scripts' }\nfunction Get-PipelineFailure($record) { $record.Exception.Message }\nfunction Enter-NotesEngine { throw 'A cached part must not start work' }\n")
             text='[00:00:01.000] You (English): A cached synthetic part.\n'
             (folder/'english-transcript.md').write_text(text)
             env=os.environ|dict(APPDATA=str(root/'appdata'),LOCALAPPDATA=str(root/'localappdata'),USERPROFILE=str(root/'profile'),SIDENOTE_DATA_DIR=str(root/'state'))

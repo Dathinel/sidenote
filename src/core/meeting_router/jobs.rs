@@ -141,6 +141,11 @@ fn valid_id(id: &str) -> bool {
 fn queue(root: &Path) -> PathBuf {
     root.join("local/router-queue")
 }
+pub(crate) fn recycle_busy(root: &Path, id: &str) -> io::Result<bool> {
+    Ok(queue(root).join(format!("{id}.json")).try_exists()?
+        || super::super::meeting_delete::lock_busy(&queue(root).join(format!("{id}.lock")))?)
+}
+
 fn destination(root: &Path, id: &str) -> PathBuf {
     root.join("local/transcripts")
         .join(id)
@@ -190,6 +195,9 @@ fn enqueue_with(root: &Path, meetings: &Path, id: &str, automatic: bool) -> Resu
     if !valid_id(id) {
         return Err("Invalid meeting id".into());
     }
+    let Some(_recycle) = super::super::meeting_delete::claim_write(root, id)? else {
+        return Ok(());
+    };
     let input = match super::inputs::Snapshot::capture(&meetings.join(id)) {
         Ok(input) => input,
         Err(_) => return Ok(()),
@@ -272,6 +280,9 @@ pub(crate) fn automatic_accepted(id: &str) -> Result<bool> {
         return Err("Invalid meeting id".into());
     }
     let root = super::super::state_dir();
+    let Some(_recycle) = super::super::meeting_delete::claim_write(&root, id)? else {
+        return Ok(false);
+    };
     let _lock = pending_lock(&root, id)?;
     automatic_accepted_locked(&root, id)
 }
@@ -598,6 +609,9 @@ pub fn run_one() -> Result<()> {
 pub(crate) fn run_one_in(request: &Path, root: &Path) -> Result<()> {
     let mut job: Job =
         serde_json::from_slice(&super::inputs::Snapshot::read_file(request, 16 << 20)?)?;
+    let Some(_recycle) = super::super::meeting_delete::claim_write(root, &job.id)? else {
+        return Ok(());
+    };
     job.config.meeting_languages = job.languages;
     job.config
         .verify_routes(&job.routes, speech_packs::registry()?)?;
@@ -789,6 +803,10 @@ pub(crate) fn run_pending_with(
             if !attempted.insert((pending.id.clone(), pending.generation)) {
                 continue;
             }
+            let Some(_recycle) = super::super::meeting_delete::claim_write(&root, &pending.id)?
+            else {
+                continue;
+            };
             found = true;
             let mut job = match snapshot(&root, &pending.id) {
                 Ok(Some(job)) => job,

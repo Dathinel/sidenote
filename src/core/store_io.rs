@@ -9,6 +9,18 @@ use std::{fs, io, io::Write, path::Path, time::Duration};
 const LOCK_RETRIES: usize = 4;
 const LOCK_RETRY_DELAY: Duration = Duration::from_millis(50);
 
+pub(crate) fn lock(path: &Path) -> io::Result<fs::File> {
+    lock_with(path, false, LOCK_RETRIES)
+}
+
+pub(crate) fn shared_lock(path: &Path) -> io::Result<fs::File> {
+    lock_with(path, true, LOCK_RETRIES)
+}
+
+pub(crate) fn try_lock(path: &Path) -> io::Result<fs::File> {
+    lock_with(path, false, 0)
+}
+
 #[cfg(target_os = "linux")]
 thread_local! {
     static UI_LOCK_DEADLINE: Cell<Option<Instant>> = const { Cell::new(None) };
@@ -140,19 +152,19 @@ fn checked_parent(path: &Path) -> io::Result<Parent> {
     })
 }
 #[cfg(windows)]
-pub(crate) fn lock(path: &Path) -> io::Result<fs::File> {
+fn lock_with(path: &Path, shared: bool, retries: usize) -> io::Result<fs::File> {
     let _parent = checked_parent(path)?;
-    for attempt in 0..=LOCK_RETRIES {
+    for attempt in 0..=retries {
         match fs::OpenOptions::new()
             .create(true)
             .truncate(false)
             .read(true)
             .write(true)
-            .share_mode(0)
+            .share_mode(if shared { 3 } else { 0 })
             .custom_flags(0x00200000)
             .open(path)
         {
-            Err(e) if matches!(e.raw_os_error(), Some(32 | 33)) && attempt < LOCK_RETRIES => {
+            Err(e) if matches!(e.raw_os_error(), Some(32 | 33)) && attempt < retries => {
                 std::thread::sleep(LOCK_RETRY_DELAY)
             }
             Ok(file) => {
@@ -384,7 +396,7 @@ fn open_parent(path: &Path, create: bool) -> io::Result<Parent> {
     })
 }
 #[cfg(unix)]
-pub(crate) fn lock(path: &Path) -> io::Result<fs::File> {
+fn lock_with(path: &Path, shared: bool, retries: usize) -> io::Result<fs::File> {
     use std::os::{fd::AsRawFd, unix::fs::OpenOptionsExt};
     let parent = checked_parent(path)?;
     let file = fs::OpenOptions::new()
@@ -402,12 +414,13 @@ pub(crate) fn lock(path: &Path) -> io::Result<fs::File> {
     if !file.metadata()?.is_file() {
         return Err(invalid("Unsafe lock file"));
     }
-    for attempt in 0..=LOCK_RETRIES {
-        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+    let mode = if shared { libc::LOCK_SH } else { libc::LOCK_EX };
+    for attempt in 0..=retries {
+        if unsafe { libc::flock(file.as_raw_fd(), mode | libc::LOCK_NB) } == 0 {
             return Ok(file);
         }
         let error = io::Error::last_os_error();
-        if error.kind() != io::ErrorKind::WouldBlock || attempt == LOCK_RETRIES {
+        if error.kind() != io::ErrorKind::WouldBlock || attempt == retries {
             return Err(error);
         }
         #[cfg(target_os = "linux")]
