@@ -163,6 +163,7 @@ jobs:
         with:
           toolchain: stable-x86_64-pc-windows-gnu
           targets: x86_64-pc-windows-gnu
+          components: clippy
       - uses: msys2/setup-msys2@40677d36a502eb2cf0fb808cc9dec31bf6152638 # v2.28.0
         id: msys2
         with:
@@ -190,12 +191,13 @@ jobs:
       - name: Run Windows pipeline tests
         if: needs.changes.outputs.tools == 'true'
         run: python -I tools/pipeline-tests.py
-      - name: Compile Stable ASR and Nightly test targets
+      - name: Compile Nightly test targets without ASR
+        run: cargo check --workspace --locked --tests --features nightly
+      - name: Clippy on Stable and Nightly ASR targets
         shell: bash
         run: |
-          cargo check --workspace --locked --tests --features asr-runtime
-          cargo check --workspace --locked --tests --features nightly
-          cargo check --workspace --locked --tests --features nightly,asr-runtime
+          cargo clippy --workspace --locked --all-targets --features asr-runtime -- -D warnings
+          cargo clippy --workspace --locked --all-targets --features nightly,asr-runtime -- -D warnings
       - name: Build the sync worker and fault-test fixture
         run: cargo build --locked -p sidenote-sync --bin sidenote-sync-worker --example worker_fault
       - name: Test Windows-specific behavior
