@@ -110,14 +110,14 @@ pub enum Field {
 #[derive(Clone)]
 pub enum Target {
     Tick,
-    ListTick(TickAttempt),
+    Checkbox(TickAttempt),
     Task(String, usize, u64),
     Memory(String, u64),
 }
 impl Target {
     fn matches(&self, s: &State) -> bool {
         match self {
-            Self::Tick | Self::ListTick(_) => true,
+            Self::Tick | Self::Checkbox(_) => true,
             Self::Memory(id, session) => {
                 s.memory.editor_generation == *session && s.memory.cursor.as_ref() == Some(id)
             }
@@ -192,9 +192,9 @@ pub enum Job {
     },
 }
 impl Job {
-    fn list_tick(&self) -> Option<&TickAttempt> {
+    fn checkbox(&self) -> Option<&TickAttempt> {
         match self {
-            Self::Move { tick, .. } => tick.as_ref().filter(|attempt| attempt.from_list),
+            Self::Move { tick, .. } => tick.as_ref().filter(|attempt| attempt.checkbox),
             _ => None,
         }
     }
@@ -209,9 +209,9 @@ impl Job {
             | Self::TeamEdit { .. }
             | Self::Redo { .. } => Target::Tick,
             Self::Move { .. } => self
-                .list_tick()
+                .checkbox()
                 .cloned()
-                .map_or(Target::Tick, Target::ListTick),
+                .map_or(Target::Tick, Target::Checkbox),
             Self::Task {
                 row,
                 index,
@@ -311,7 +311,7 @@ impl Job {
     /// Folds a move into a waiting move of the same card: one save for what the user chose last,
     /// with the status from before still applying where the later move names none.
     fn absorb_move(&mut self, next: &Job) -> bool {
-        if self.list_tick().is_some() || next.list_tick().is_some() {
+        if self.checkbox().is_some() || next.checkbox().is_some() {
             return false;
         }
         let (
@@ -371,16 +371,16 @@ impl State {
     }
     pub(super) fn save_blocks_task_navigation(&self) -> bool {
         self.edit_busy
-            && (!self.tasks.list_tick_running
+            && (!self.tasks.checkbox_running
                 || self
                     .edit_queue
                     .waiting
                     .iter()
-                    .any(|job| job.list_tick().is_none()))
+                    .any(|job| job.checkbox().is_none()))
     }
 
     fn start_edit(&mut self, job: Job) {
-        self.tasks.list_tick_running = job.list_tick().is_some();
+        self.tasks.checkbox_running = job.checkbox().is_some();
         let mut guard = Guard {
             target: Some(job.target()),
             events: self.events_tx.clone(),
@@ -523,7 +523,7 @@ impl State {
     }
     pub(super) fn edit_finished(&mut self, completion: Completion) {
         self.edit_busy = false;
-        self.tasks.list_tick_running = false;
+        self.tasks.checkbox_running = false;
         self.apply_completion(completion);
         if let Some(next) = self.edit_queue.finish() {
             self.edit_busy = true;
@@ -638,12 +638,12 @@ impl State {
                         self.tasks.overrides = view.value;
                     }
                 }
-                let list_tick = tick.as_ref().is_some_and(|attempt| attempt.from_list);
+                let checkbox = tick.as_ref().is_some_and(|attempt| attempt.checkbox);
                 if let Some(attempt) = tick {
                     self.finish_task_tick(attempt, newest, error);
                 }
                 if let Some(e) = error
-                    && !list_tick
+                    && (!checkbox || e == SaveError::WorkerStopped)
                 {
                     self.tasks.notice = Some(e.message().into());
                 }
@@ -661,7 +661,7 @@ impl State {
             Completion::Failed(Target::Tick) => {
                 self.notice = Some(SaveError::WorkerStopped.message().into())
             }
-            Completion::Failed(Target::ListTick(attempt)) => {
+            Completion::Failed(Target::Checkbox(attempt)) => {
                 let stopped = SaveError::WorkerStopped;
                 self.finish_task_tick(attempt, None, Some(stopped));
                 self.tasks.notice = Some(stopped.message().into());
@@ -681,16 +681,12 @@ impl State {
                 ..
             } => match result {
                 Ok(view) => {
-                    let saved = if let Some(item) = self
-                        .tasks
-                        .all
-                        .iter()
-                        .find(|t| t.meeting_id == row && t.index == index && !t.manual)
-                    {
+                    let opened = self.tasks.edit_item.as_ref().filter(|t| !t.manual);
+                    let saved = if let Some(item) = opened {
                         serde_json::to_value(view.value.match_task(
                             &row,
                             &item.stable_id,
-                            &item.task,
+                            mine["task"].as_str().unwrap_or(&item.task),
                             index,
                         ))
                         .unwrap_or_default()
