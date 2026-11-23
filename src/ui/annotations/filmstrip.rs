@@ -8,6 +8,11 @@ use sidenote::core::UiPrefs;
 
 const STRIP: &str = "annotation-filmstrip";
 const THUMB_WIDTH: f32 = 176.0;
+const THUMB_HEIGHT: f32 = 99.0;
+const THUMB_RADIUS: f32 = 6.0;
+const THUMB_GAP: f32 = 10.0;
+const STRIP_PADDING: f32 = 4.0;
+const LEADING_STEPS: usize = 2;
 
 pub(super) fn view_switch(s: &State, p: Palette) -> El {
     let mut kit = theme::kit(&p);
@@ -32,6 +37,10 @@ pub(super) fn view_switch(s: &State, p: Palette) -> El {
             }
         }
         s.annotations.transcript = false;
+        if filmstrip {
+            let step = s.annotations.filmstrip_step;
+            select_step(s, step, tx);
+        }
         tx.scroll_to_y("annotations-pane", 0.0);
     })
     .build(&kit)
@@ -81,33 +90,49 @@ fn thumb_key(index: usize) -> String {
 
 fn select_step(s: &mut State, index: usize, tx: &mut Tx) {
     s.annotations.filmstrip_step = index;
-    tx.scroll_into_view_in(STRIP, thumb_key(index));
+    if index < LEADING_STEPS {
+        tx.scroll_to_x(STRIP, 0.0);
+    } else {
+        tx.scroll_into_view_in(STRIP, thumb_key(index));
+    }
 }
 
 pub(super) fn view(s: &State, c: &Capture, width: f32, p: Palette) -> El {
-    let index = s.annotations.filmstrip_step.min(c.data.keyframes.len() - 1);
+    let steps = c.data.keyframes.len();
+    let index = s.annotations.filmstrip_step.min(steps - 1);
     let frame = &c.data.keyframes[index];
-    let mut thumbs = row().gap(10.0).padding(4.0);
+    let thumb_width = THUMB_WIDTH.min((width - 2.0 * STRIP_PADDING - THUMB_GAP) / 2.0);
+    let thumb_height = thumb_width * (THUMB_HEIGHT / THUMB_WIDTH);
+    let strip_width = (thumb_width + THUMB_GAP) * steps as f32 - THUMB_GAP + 2.0 * STRIP_PADDING;
+    let mut thumbs = row().gap(THUMB_GAP).padding(STRIP_PADDING);
     for (i, frame) in c.data.keyframes.iter().enumerate() {
         let selected = index == i;
-        let mut shot = el().size(THUMB_WIDTH, 99.0).clip_rounded(6.0).fill(p.card);
+        let mut shot = el()
+            .size(thumb_width, thumb_height)
+            .clip_rounded(THUMB_RADIUS)
+            .fill(p.card);
         if let Some(Ok(image)) = s.annotations.images.get(i) {
             shot = shot.pixels_fit(image.pixels(), SurfaceFit::Fit);
         }
-        shot = shot.outline(
-            if selected { 2.0 } else { 1.0 },
-            0.0,
-            if selected { p.ink } else { p.line },
+        // Paint the border over the image, outside the image's rounded clip.
+        let thumbnail = col().child(shot).child(
+            el().absolute(0.0, 0.0)
+                .size(thumb_width, thumb_height)
+                .radius(THUMB_RADIUS)
+                .border(
+                    if selected { 2.0 } else { 1.0 },
+                    if selected { p.ink } else { p.line },
+                ),
         );
         let number = i + 1;
         let timestamp = time(frame.t);
         thumbs = thumbs.child(
-            pressable(col().w(THUMB_WIDTH).gap(6.0))
+            pressable(col().w(thumb_width).gap(6.0))
                 .key(thumb_key(i))
                 .label(format!("Step {number}, {timestamp}"))
                 .checked(selected)
                 .focus_ring(2.0, 2.0, p.ink)
-                .child(shot)
+                .child(thumbnail)
                 .child(roles::META.line(
                     format!("{number}{}{timestamp}", roles::DOT),
                     if selected { p.ink } else { p.faint },
@@ -115,19 +140,24 @@ pub(super) fn view(s: &State, c: &Capture, width: f32, p: Palette) -> El {
                 .on_press_tx(move |s: &mut State, tx| select_step(s, i, tx)),
         );
     }
+    let strip = col()
+        .key(STRIP)
+        .w_full()
+        .min_w(0.0)
+        .scroll_x()
+        .scroll_margin(STRIP_PADDING)
+        .child(thumbs);
+    // Rune can paint a collapsed scrollbar thumb as a one-pixel mark.
+    let strip = if strip_width > width {
+        strip.scroll_bar_styled(ScrollBarStyle::native(p.soft, p.ink).horizontal())
+    } else {
+        strip
+    };
     col()
         .w_full()
         .gap(14.0)
         .key("annotation-filmstrip-view")
         .child(frame_image(s, c, index, frame, width.min(680.0), p))
         .child(step_details(c, index, frame, p, true).w_full().max_w(680.0))
-        .child(
-            col()
-                .key(STRIP)
-                .w_full()
-                .min_w(0.0)
-                .scroll_x()
-                .child(thumbs)
-                .scroll_bar_styled(ScrollBarStyle::native(p.soft, p.ink).horizontal()),
-        )
+        .child(strip)
 }

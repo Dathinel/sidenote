@@ -18,6 +18,20 @@ fn worker_child() {
         }
     }
     let output = PathBuf::from(std::env::var_os("SIDENOTE_BATCH_OUTPUT").unwrap());
+    if mode == "close-input" {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Foundation::CloseHandle;
+        let stdin = std::io::stdin();
+        let mut start = String::new();
+        stdin.read_line(&mut start).unwrap();
+        assert_eq!(start, "start\n");
+        // The disposable fixture owns this inherited handle and never reads stdin again.
+        assert_ne!(unsafe { CloseHandle(stdin.as_raw_handle()) }, 0);
+        let exit = Signal::open_for_wait("fixture-exit");
+        Signal::notify("fixture-ready");
+        exit.wait_active();
+        std::process::exit(23);
+    }
     if mode.starts_with("deadline-") {
         super::lifetime_tests::drive(&mode, &output);
         return;
@@ -145,6 +159,22 @@ fn cancel_timeout_drop_reap_worker_tree() {
             CloseHandle(handle);
         }
     }
+}
+#[test]
+fn closed_input_before_process_exit_preserves_status() {
+    let mut command = command("close-input");
+    let exit = Signal::attach(&mut command, "fixture-exit");
+    let mut worker = start_ready(command);
+    // Release the fixture only after the failed write and the live-process check.
+    super::ON_BROKEN_PIPE.with(|slot| *slot.borrow_mut() = Some(exit));
+    let error = worker
+        .recognize(&ranges(Path::new("unused.wav")).remove(1))
+        .unwrap_err();
+    assert!(
+        matches!(error.downcast_ref::<WorkerFailure>(), Some(WorkerFailure::Exited(status)) if status.code() == Some(23)),
+        "{error:?}"
+    );
+    worker.finish().unwrap();
 }
 #[test]
 fn process_crash_preserves_completed_receipts() {
