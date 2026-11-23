@@ -4,9 +4,13 @@
 //! Copying uses the window's own clipboard request (`Tx::copy`). The folder opens through
 //! File Explorer with the path as one argument, and an export is written into the app's
 //! `exports` folder, never into a meeting folder, so a meeting from another device is only read.
-use super::{State, theme::Palette};
-use rune::{El, Tx};
-use rune_kit::{Kit, Menu, MenuItem, Placement};
+use super::{
+    State,
+    theme::Palette,
+    widgets::{menu_row, menu_separator, menu_surface, menu_trigger},
+};
+use rune::{Align, El, Side, Tx, col};
+use rune_kit::Kit;
 use sidenote::{
     core::{Meeting, export},
     platform,
@@ -82,6 +86,7 @@ impl State {
 
     /// Puts the whole transcript on the clipboard, as plain lines.
     pub fn copy_transcript(&mut self, id: &str, tx: &mut Tx) {
+        self.more_menu = None;
         let Some(text) = self.meeting_by_id(id).map(|meeting| {
             if self.transcript_original
                 && let Some(routed) = &meeting.routed
@@ -140,13 +145,14 @@ pub fn menu(s: &State, k: &Kit, m: &Meeting, scope: &str, p: Palette, layer: &mu
     let key = format!("more-{scope}-{}", m.id);
     let open = s.more_menu.as_deref() == Some(key.as_str());
     let toggle = key.clone();
+    let trigger_key = format!("{key}-button");
     let trigger = if scope == "row" {
-        super::widgets::quiet_button("More", &format!("{key}-button"), p)
+        super::widgets::quiet_button("More", &trigger_key, p)
     } else {
         let button = super::widgets::icon_button(
             &super::icons::MORE,
             "More actions",
-            &format!("{key}-button"),
+            &trigger_key,
             super::widgets::ButtonRole::Ghost,
             p,
         );
@@ -155,63 +161,55 @@ pub fn menu(s: &State, k: &Kit, m: &Meeting, scope: &str, p: Palette, layer: &mu
         } else {
             button
         }
-    }
-    .on_press(move |s: &mut State| {
+    };
+    let trigger = menu_trigger(trigger, open, p, move |s| {
         let same = s.more_menu.as_deref() == Some(toggle.as_str());
         s.more_menu = (!same).then(|| toggle.clone());
     });
-    let mut menu = Menu::new(key)
-        .trigger(trigger)
-        .open(open)
-        .placement(Placement::BottomEnd)
-        .min_width(250.0);
     if open {
         let has_decisions = !export::decisions_markdown(m).is_empty();
         let has_todos = !m.summary.todo.is_empty();
-        menu = menu.on_close(|s: &mut State| s.more_menu = None);
-        let copy = |label_: &str, part: Part, enabled: bool, none: &str| {
+        let copy = |label: &str, part: Part, enabled: bool| {
             let id = m.id.clone();
-            let item = MenuItem::new(label_.to_string())
+            let detail = (!enabled).then_some("None in this meeting");
+            menu_row(label, p, detail, None, None)
+                .focusable(enabled)
                 .disabled(!enabled)
-                .on_select_tx(move |s: &mut State, tx| s.copy_part_of(&id, part, tx));
-            if enabled {
-                item
-            } else {
-                item.description(none.to_string())
-            }
+                .layer_opacity(if enabled { 1.0 } else { 0.5 })
+                .on_press_tx(move |s: &mut State, tx| s.copy_part_of(&id, part, tx))
         };
         let folder_id = m.id.clone();
         let export_id = m.id.clone();
-        menu = menu
-            .item(copy("Copy summary", Part::Notes, true, ""))
-            .item(copy(
-                "Copy decisions",
-                Part::Decisions,
-                has_decisions,
-                "None in this meeting",
-            ))
-            .item(copy(
-                "Copy tasks",
-                Part::Todos,
-                has_todos,
-                "None in this meeting",
-            ))
-            .separator()
-            .item(
-                MenuItem::new("Open meeting folder")
-                    .on_select(move |s: &mut State| s.open_meeting_folder(&folder_id)),
+        let mut menu = col()
+            .child(copy("Copy summary", Part::Notes, true))
+            .child(copy("Copy decisions", Part::Decisions, has_decisions))
+            .child(copy("Copy tasks", Part::Todos, has_todos))
+            .child(menu_separator(p))
+            .child(
+                menu_row("Open meeting folder", p, None, None, None)
+                    .on_press(move |s: &mut State| s.open_meeting_folder(&folder_id)),
             )
-            .item(
-                MenuItem::new("Export this meeting (Markdown)")
-                    .description("Summary and your notes, no transcript")
-                    .on_select_tx(move |s: &mut State, tx| s.export_meeting(&export_id, tx)),
+            .child(
+                menu_row(
+                    "Export this meeting (Markdown)",
+                    p,
+                    Some("Summary and your notes, no transcript"),
+                    None,
+                    None,
+                )
+                .on_press_tx(move |s: &mut State, tx| s.export_meeting(&export_id, tx)),
             );
         if scope == "meeting" {
-            menu = super::meeting::reading::menu_items(s, m, menu);
+            menu = super::meeting::reading::menu_items(s, m, menu, p);
         }
-        let mut menu_kit = k.clone();
-        menu_kit.ty.ui_compact = super::roles::NAV.style();
-        return menu.build(&menu_kit, layer);
+        menu_surface(
+            k,
+            p,
+            layer,
+            menu,
+            (&key, &trigger_key, Side::Bottom, Align::End, 240.0),
+            |s| s.more_menu = None,
+        );
     }
-    menu.build(k, layer)
+    trigger
 }

@@ -1,4 +1,5 @@
 //! Capture review, explicit approval and locally saved annotation notes.
+mod filmstrip;
 pub(super) mod notebooks;
 mod workflow;
 use super::{
@@ -35,6 +36,8 @@ pub struct Annotations {
     errors: Vec<String>,
     selected: Option<PathBuf>,
     transcript: bool,
+    filmstrip: bool,
+    filmstrip_step: usize,
     menu_open: bool,
     loading: bool,
     images: Vec<Result<Image, String>>,
@@ -66,6 +69,11 @@ pub struct Annotations {
     other_model: bool,
 }
 impl Annotations {
+    pub(super) fn with_view(mut self, view: usize) -> Self {
+        self.filmstrip = view == 1;
+        self
+    }
+
     pub(super) fn working(&self) -> bool {
         self.busy
     }
@@ -282,6 +290,7 @@ impl State {
         self.annotations.editing.clear();
         self.annotations.selected = Some(capture.folder.clone());
         self.annotations.transcript = false;
+        self.annotations.filmstrip_step = 0;
         self.annotations.menu_open = false;
         self.annotations.images.clear();
         let sender = self.events_tx.clone();
@@ -440,7 +449,7 @@ impl State {
     }
 }
 
-pub fn on_key(s: &mut State, e: &rune::KeyEvent) -> bool {
+pub fn on_key(s: &mut State, e: &rune::KeyEvent, tx: &mut rune::Tx) -> bool {
     if e.key == Key::Escape {
         if s.annotations.review.take().is_some() {
             if let Some(id) = s.annotations.notebooks.pending.take() {
@@ -460,7 +469,7 @@ pub fn on_key(s: &mut State, e: &rune::KeyEvent) -> bool {
         s.annotations.images.clear();
         return true;
     }
-    false
+    filmstrip::on_key(s, e, tx)
 }
 fn date(c: &Capture) -> String {
     chrono::DateTime::from_timestamp_millis(c.data.created_at_ms)
@@ -543,16 +552,27 @@ fn step_excerpt<'a>(c: &Capture, mark: &'a Mark) -> Option<(&'a str, String)> {
         return None;
     }
     let words = c.words_for_mark(mark);
-    let excerpt = words
-        .split_inclusive(|word| {
-            word.text
-                .trim()
-                .trim_end_matches(['"', '\'', ')', '”', '’'])
-                .ends_with(['.', '?', '!', '。', '？', '！'])
+    let ends_sentence = |word: &Word| {
+        word.text
+            .trim()
+            .trim_end_matches(['"', '\'', ')', '”', '’'])
+            .ends_with(['.', '?', '!', '。', '？', '！'])
+    };
+    let timed = &c.data.transcript.words;
+    let first = *words.first()?;
+    let start = timed.iter().position(|word| std::ptr::eq(word, first))?;
+    let before = &timed[..start];
+    let sentence_start = before.iter().rposition(ends_sentence).map_or(0, |i| i + 1);
+    let excerpt = before[sentence_start..]
+        .iter()
+        .chain(words)
+        .scan(0, |sentences, word| {
+            if *sentences == 2 {
+                return None;
+            }
+            *sentences += usize::from(ends_sentence(word));
+            Some(word.text.trim())
         })
-        .take(2)
-        .flatten()
-        .map(|word| word.text.trim())
         .filter(|text| !text.is_empty())
         .collect::<Vec<_>>()
         .join(" ");
@@ -777,6 +797,7 @@ fn capture_page(s: &State, c: &Capture, width: f32, p: Palette, layer: &mut Vec<
                         .grow(1.0)
                         .min_w(0.0),
                     )
+                    .child(filmstrip::view_switch(s, p))
                     .child(capture_menu(s, c, p, layer)),
             ),
     );
@@ -822,80 +843,10 @@ fn capture_page(s: &State, c: &Capture, width: f32, p: Palette, layer: &mut Vec<
         }
         return page.child(hex::settings::panel(p).child(text.padding(18.0)));
     }
-    let side_by_side = width >= 640.0;
-    let image_width = width.min(360.0);
-    for (index, frame) in c.data.keyframes.iter().enumerate() {
-        let step = index + 1;
-        let timestamp = time(frame.t);
-        let transcript_part = c
-            .data
-            .transcript
-            .words
-            .iter()
-            .position(|word| word.t1 >= frame.t)
-            .unwrap_or_else(|| c.data.transcript.words.len().saturating_sub(1))
-            / TRANSCRIPT_CHUNK;
-        let mut details = col().grow(1.0).min_w(0.0).gap(8.0).child(
-            row()
-                .items_center()
-                .gap(4.0)
-                .child(roles::META.line(format!("Step {step}{}", roles::DOT.trim_end()), p.faint))
-                .child(
-                    pressable(
-                        roles::TIME
-                            .line(&timestamp, p.soft)
-                            .decorations(vec![Span::new(0, timestamp.len()).underline(p.soft)]),
-                    )
-                    .key(format!("annotation-step-time-{step}"))
-                    .role("link")
-                    .label(format!("Transcript at {timestamp}"))
-                    .on_press_tx(move |s: &mut State, tx| {
-                        s.annotations.transcript = true;
-                        tx.scroll_to_y("annotations-pane", 0.0);
-                        tx.scroll_key_to(
-                            format!("annotation-transcript-part-{transcript_part}"),
-                            12.0,
-                        );
-                    }),
-                ),
-        );
-        for (i, mark) in c.data.marks.iter().enumerate() {
-            if c.frame_for_mark(mark)
-                .is_some_and(|f| f.index == frame.index)
-                && let Some((heading, excerpt)) = step_excerpt(c, mark)
-            {
-                details = details.child(
-                    col()
-                        .w_full()
-                        .gap(4.0)
-                        .key(format!("annotation-callout-{}", i + 1))
-                        .child(
-                            row().items_start().gap(8.0).child(mark_badge(i + 1)).child(
-                                roles::TITLE
-                                    .wrap(heading, p.ink)
-                                    .grow(1.0)
-                                    .min_w(0.0)
-                                    .role("heading"),
-                            ),
-                        )
-                        .child(roles::READ.wrap(excerpt, p.body).selectable(true)),
-                );
-            }
-        }
-        let visual = frame_image(s, c, index, frame, image_width, p);
-        let body = if side_by_side {
-            row().items_start().gap(24.0).child(visual).child(details)
-        } else {
-            col().gap(12.0).child(visual).child(details)
-        };
-        page = page.child(
-            col()
-                .w_full()
-                .gap(16.0)
-                .key(format!("annotation-frame-{}", frame.index))
-                .child(el().w_full().h(1.0).fill(p.line))
-                .child(body.w_full()),
-        );
+    if s.annotations.filmstrip && steps > 0 {
+        page = page.child(filmstrip::view(s, c, width, p));
+    } else {
+        page = blocks(s, c, width, p, page);
     }
     if steps == 0 {
         page = page.child(roles::SMALL.wrap("This capture has no keyframes yet.", p.soft));
@@ -915,6 +866,105 @@ fn capture_page(s: &State, c: &Capture, width: f32, p: Palette, layer: &mut Vec<
     }
     page
 }
+fn blocks(s: &State, c: &Capture, width: f32, p: Palette, mut page: El) -> El {
+    let side_by_side = width >= 640.0;
+    let image_width = width.min(360.0);
+    for (index, frame) in c.data.keyframes.iter().enumerate() {
+        let details = step_details(c, index, frame, p, false);
+        let visual = frame_image(s, c, index, frame, image_width, p);
+        let body = if side_by_side {
+            row().items_start().gap(24.0).child(visual).child(details)
+        } else {
+            col().gap(12.0).child(visual).child(details)
+        };
+        page = page.child(
+            col()
+                .w_full()
+                .gap(16.0)
+                .key(format!("annotation-frame-{}", frame.index))
+                .child(el().w_full().h(1.0).fill(p.line))
+                .child(body.w_full()),
+        );
+    }
+    page
+}
+
+fn step_details(c: &Capture, index: usize, frame: &Keyframe, p: Palette, filmstrip: bool) -> El {
+    let step = index + 1;
+    let step_label = if filmstrip {
+        format!(
+            "Step {step} of {}{}",
+            c.data.keyframes.len(),
+            roles::DOT.trim_end()
+        )
+    } else {
+        format!("Step {step}{}", roles::DOT.trim_end())
+    };
+    let timestamp = time(frame.t);
+    let transcript_part = c
+        .data
+        .transcript
+        .words
+        .iter()
+        .position(|word| word.t1 >= frame.t)
+        .unwrap_or_else(|| c.data.transcript.words.len().saturating_sub(1))
+        / TRANSCRIPT_CHUNK;
+    let mut details = col().grow(1.0).min_w(0.0).gap(8.0).child(
+        row()
+            .items_center()
+            .gap(4.0)
+            .child(roles::META.line(step_label, p.faint))
+            .child(
+                pressable(
+                    roles::TIME
+                        .line(&timestamp, p.soft)
+                        .decorations(vec![Span::new(0, timestamp.len()).underline(p.soft)]),
+                )
+                .key(format!("annotation-step-time-{step}"))
+                .role("link")
+                .label(format!("Transcript at {timestamp}"))
+                .on_press_tx(move |s: &mut State, tx| {
+                    s.annotations.transcript = true;
+                    tx.scroll_to_y("annotations-pane", 0.0);
+                    tx.scroll_key_to(
+                        format!("annotation-transcript-part-{transcript_part}"),
+                        12.0,
+                    );
+                }),
+            ),
+    );
+    for (i, mark) in c.data.marks.iter().enumerate() {
+        if c.frame_for_mark(mark)
+            .is_some_and(|f| f.index == frame.index)
+            && let Some((heading, excerpt)) = step_excerpt(c, mark).or_else(|| {
+                let heading = mark.description.as_deref()?.trim();
+                (filmstrip && !heading.is_empty()).then(|| (heading, String::new()))
+            })
+        {
+            details = details.child(
+                col()
+                    .w_full()
+                    .gap(4.0)
+                    .key(format!("annotation-callout-{}", i + 1))
+                    .child(
+                        row().items_start().gap(8.0).child(mark_badge(i + 1)).child(
+                            roles::TITLE
+                                .wrap(heading, p.ink)
+                                .grow(1.0)
+                                .min_w(0.0)
+                                .role("heading"),
+                        ),
+                    )
+                    .children(
+                        (!excerpt.is_empty())
+                            .then(|| roles::READ.wrap(excerpt, p.body).selectable(true)),
+                    ),
+            );
+        }
+    }
+    details
+}
+
 pub fn pane(s: &State, p: Palette, narrow: bool) -> El {
     let width = (s.app_w.get() - nav::width(s) - 1.0 - if narrow { 32.0 } else { 64.0 })
         .clamp(240.0, 1040.0);
@@ -1172,6 +1222,32 @@ mod tests {
         mark.description = Some("Sample mark".into());
         capture.data.transcript.words.clear();
         assert_eq!(step_excerpt(&capture, &mark), None);
+    }
+
+    #[test]
+    fn step_excerpt_recovers_the_start_of_a_clipped_sentence() {
+        let capture = Capture {
+            folder: PathBuf::new(),
+            data: serde_json::from_value(serde_json::json!({
+                "transcript": {"words": [
+                    {"t0": 0.0, "t1": 1.0, "text": "Earlier."},
+                    {"t0": 5.0, "t1": 6.0, "text": "Bring"},
+                    {"t0": 7.0, "t1": 8.0, "text": "cards.”"},
+                    {"t0": 9.0, "t1": 10.0, "text": "Thanks!"}
+                ]}
+            }))
+            .unwrap(),
+        };
+        let mark = Mark {
+            description: Some("Materials".into()),
+            t0: 10.0,
+            t1: 10.0,
+            ..Default::default()
+        };
+        assert_eq!(
+            step_excerpt(&capture, &mark),
+            Some(("Materials", "Bring cards.” Thanks!".into()))
+        );
     }
 
     #[test]
