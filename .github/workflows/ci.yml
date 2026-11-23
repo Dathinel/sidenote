@@ -66,11 +66,11 @@ jobs:
             target/debug
           key: ci-ubuntu-24.04-${{ steps.rust.outputs.cachekey }}-${{ hashFiles('Cargo.lock', '.cargo/config.toml') }}
           restore-keys: ci-ubuntu-24.04-${{ steps.rust.outputs.cachekey }}-
-      - name: Clippy on Stable and Nightly ASR test targets
+      - name: Clippy on Stable and Dev ASR test targets
         run: |
           cargo clippy --workspace --locked --all-targets --features asr-runtime -- -D warnings
-          cargo clippy --workspace --locked --all-targets --features nightly,asr-runtime -- -D warnings
-      - name: Test Stable and Nightly
+          cargo clippy --workspace --locked --all-targets --features dev,asr-runtime -- -D warnings
+      - name: Test Stable and Dev
         shell: bash
         run: |
           umask 077
@@ -99,7 +99,7 @@ jobs:
                 --skip=service::speech::proofs::locking::job_creation_keeps_intake_ownership_until_processing_is_locked
                 --skip=tests::server_role_exposes_only_scoped_host_probe)
           cargo test --locked --workspace --no-fail-fast --features asr-runtime -- "${skip[@]}"
-          cargo test --locked --workspace --no-fail-fast --features nightly,asr-runtime -- "${skip[@]}"
+          cargo test --locked --workspace --no-fail-fast --features dev,asr-runtime -- "${skip[@]}"
           cargo test --locked -p sidenote --no-default-features --test channel_boundary
           cargo test --locked -p sidenote --no-default-features --features asr-runtime --test channel_boundary
           cargo test --locked -p sidenote --lib --bin sidenote -- \
@@ -191,13 +191,13 @@ jobs:
       - name: Run Windows pipeline tests
         if: needs.changes.outputs.tools == 'true'
         run: python -I tools/pipeline-tests.py
-      - name: Compile Nightly test targets without ASR
-        run: cargo check --workspace --locked --tests --features nightly
-      - name: Clippy on Stable and Nightly ASR targets
+      - name: Compile Dev test targets without ASR
+        run: cargo check --workspace --locked --tests --features dev
+      - name: Clippy on Stable and Dev ASR targets
         shell: bash
         run: |
           cargo clippy --workspace --locked --all-targets --features asr-runtime -- -D warnings
-          cargo clippy --workspace --locked --all-targets --features nightly,asr-runtime -- -D warnings
+          cargo clippy --workspace --locked --all-targets --features dev,asr-runtime -- -D warnings
       - name: Build the sync worker and fault-test fixture
         run: cargo build --locked -p sidenote-sync --bin sidenote-sync-worker --example worker_fault
       - name: Test Windows-specific behavior
@@ -205,7 +205,7 @@ jobs:
         run: |
           export SIDENOTE_DATA_DIR=$(cygpath -w "$RUNNER_TEMP/sidenote-ci")
           # Child-process fixtures reserve a bare --skip token for their protocol.
-          cargo test --locked --features nightly,asr-runtime -p sidenote --lib -- \
+          cargo test --locked --features dev,asr-runtime -p sidenote --lib -- \
             platform::windows::tests:: updates::implementation:: hex_install:: meeting_icon:: \
             platform::windows::close_tests:: core::annotations::notebook_tests:: \
             approval_seals_reviewed_bytes_and_send_pins_the_same_files core::config::tests:: \
@@ -229,16 +229,16 @@ jobs:
             service::tests::exclusively_locked_device_file_falls_back_once \
             --skip=meeting_icon_capture_affinity_updates_live_windows
           # This test exists only in a build without the ASR feature.
-          cargo test --locked --features nightly -p sidenote --lib -- \
+          cargo test --locked --features dev -p sidenote --lib -- \
             core::meeting_evidence::speech_host_tests::speech_host_without_runtime_does_not_consume_a_local_attempt
-          cargo test --locked --features nightly,asr-runtime -p sidenote --bin sidenote -- \
+          cargo test --locked --features dev,asr-runtime -p sidenote --bin sidenote -- \
             install_hooks_tests:: ui::models::dev40_ ui::models::provisioning_review_ \
             ui::hex::connection::stop_tests:: ui::hex::connection::tests:: ui::hex::settings:: \
             ui::ask_switch_tests::deletion_cancels_delayed_ask_text_and_answers_in_all_scopes \
             ui::ask_switch_tests::suppression_failure_during_ui_apply_retries_unchanged_catalog
           SIDENOTE_SYNC_TEST_ARTIFACT_DIR="$(cygpath -aw "target/$CARGO_BUILD_TARGET/debug")" \
             cargo test --locked -p sidenote-sync --lib -- worker::tests::
-          cargo test --locked --features nightly,asr-runtime -p sidenote --test idle_cpu --test relay_preview --test meeting_delete_storage --test meeting_delete_visibility
+          cargo test --locked --features dev,asr-runtime -p sidenote --test idle_cpu --test relay_preview --test meeting_delete_storage --test meeting_delete_visibility
           cargo test --locked -p sidenote --no-default-features --test channel_boundary
           cargo test --locked -p sidenote --lib --bin sidenote -- \
             core::agent_tools:: core::ask_options:: listener::pipeline_tests:: \
@@ -253,10 +253,8 @@ jobs:
           persist-credentials: false
       - name: List contributor checks
         run: python3 -I tools/check.py --list
-      - name: Test the Markdown link checker
-        run: python3 -I tools/check_links.py --self-test
-      - name: Check Markdown links
-        run: python3 -I tools/check_links.py
+      - name: Run fast contributor checks
+        run: python3 -I tools/check.py --fast
 
   gate:
     name: CI Gate

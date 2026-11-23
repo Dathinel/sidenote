@@ -107,12 +107,12 @@ class CargoArgs {
     if ($calls.Count -ne 2) { throw 'Expected both Clippy gate calls.' }
     $prefix = @('+stable-x86_64-pc-windows-gnu', 'clippy', '--locked', '--all-targets')
     $suffix = @('--', '-D', 'warnings')
-    $cases = @(foreach ($channel in 'stable', 'nightly') {
+    $cases = @(foreach ($channel in 'stable', 'dev') {
         $clippy = @('-j', '1')
         $asr = 'asr-runtime'
-        if ($channel -eq 'nightly') {
-            $clippy += @('--features', 'nightly')
-            $asr = 'asr-runtime,nightly'
+        if ($channel -eq 'dev') {
+            $clippy += @('--features', 'dev')
+            $asr = 'asr-runtime,dev'
         }
         @{ Channel = $channel; Command = $calls[0].Groups[1].Value; Expected = $prefix + $clippy + $suffix }
         @{ Channel = $channel; Command = $calls[1].Groups[1].Value; Expected = $prefix + @('--features', $asr, '-j', '1') + $suffix }

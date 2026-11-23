@@ -8,7 +8,7 @@ param(
     [Parameter(Mandatory = $true)] [string]$GnuBin,
     [Parameter(Mandatory = $true)] [string]$ReleaseNotes,
     [Parameter(Mandatory = $true)] [string]$Log,
-    [ValidateSet('stable', 'nightly')] [string]$Channel
+    [ValidateSet('stable', 'dev')] [string]$Channel
 )
 $ErrorActionPreference = 'Stop'
 try {

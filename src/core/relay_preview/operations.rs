@@ -158,7 +158,7 @@ fn finish(root: &Path, address: &str, generation: u64) {
     };
 }
 pub fn check_now(root: &Path) -> io::Result<Operational> {
-    require_nightly()?;
+    require_dev()?;
     #[cfg(target_os = "linux")]
     if cfg!(target_os = "linux") {
         return Ok(Operational {
@@ -315,7 +315,7 @@ mod tests {
     }
     #[test]
     #[cfg(windows)]
-    #[cfg(feature = "nightly")]
+    #[cfg(feature = "dev")]
     fn successful_contact_survives_outage_and_a_fresh_status_cache() {
         let parent = std::env::temp_dir().join("sidenote-relay-preview");
         std::fs::create_dir_all(&parent).unwrap();

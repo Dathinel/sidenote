@@ -10,8 +10,8 @@ with a recorder warning. An unreadable process snapshot also fails the gate.
 The snapshots never start, stop or reconfigure the installed app or its task.
 
 Windows installs check their channel's HTTPS feed in `harshanandak/sidenote`.
-Stable reads `/releases/latest/download/releases.stable.json`. Nightly reads
-`/releases/download/nightly/releases.nightly.json` from the rolling Nightly
+Stable reads `/releases/latest/download/releases.stable.json`. Dev reads
+`/releases/download/dev/releases.dev.json` from the rolling Dev
 prerelease. Settings > Updates can change the feed. Switching to Stable keeps
 the current build installed until Stable has a newer version. Checks run at
 startup and every six hours.
@@ -29,20 +29,20 @@ feeds: hashes detect corruption but do not authenticate an unsigned publisher.
 
 1. Set the package version in `Cargo.toml` and update the workspace package's
    entry in `Cargo.lock`. Stable starts at `0.1.0`, above `0.0.1-dev.47`.
-   Nightly starts at `0.1.1-dev.1`. Increment its numeric suffix for each build.
-   When Stable reaches the Nightly base version, advance Nightly to the next
-   patch base so every published Nightly sorts above the latest Stable.
+   Dev starts at `0.1.1-dev.1`. Increment its numeric suffix for each build.
+   When Stable reaches the Dev base version, advance Dev to the next
+   patch base so every published Dev sorts above the latest Stable.
 2. Install the matching Velopack CLI 0.0.1298 and .NET SDK. From the checkout,
    run `tools/local_build.ps1 -Pack` with the pinned release arguments and
-   `-Channel stable` or `-Channel nightly`. Gate with the same channel.
+   `-Channel stable` or `-Channel dev`. Gate with the same channel.
    The script builds and packs locally; it does not upload anything.
 3. Use a fresh output folder for each channel's first release. Put
    `sidenote-<channel>-Setup.exe`, `releases.<channel>.json`, and **every
    referenced `.nupkg`** on the channel's GitHub release, preserving filenames.
    The feed and all referenced packages must be assets on this same release,
    even when a package came from an older release. The app downloads full packages.
-4. Mark the version-tagged Stable release as latest. Use the `nightly` tag
-   for the rolling Nightly prerelease. Verify each feed and its assets.
+4. Mark the version-tagged Stable release as latest. Use the `dev` tag
+   for the rolling Dev prerelease. Verify each feed and its assets.
 
 The package includes `LICENSE`, `THIRD_PARTY.md`, the Inter font licence,
 the webpki-roots CDLA licence, `DEPENDENCY_NOTICES.md`, and upstream licence,

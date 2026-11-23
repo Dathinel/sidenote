@@ -14,7 +14,7 @@ fn default_test_paths_are_isolated_from_owner_appdata() {
 #[cfg(feature = "desktop")]
 mod ui;
 fn unavailable_in_stable(args: &[std::ffi::OsString]) -> Option<&str> {
-    const NIGHTLY_FLAGS: &[&str] = &[
+    const DEV_FLAGS: &[&str] = &[
         "--server",
         "--speech-worker",
         "--speech-port",
@@ -34,7 +34,7 @@ fn unavailable_in_stable(args: &[std::ffi::OsString]) -> Option<&str> {
     }
     args.iter()
         .filter_map(|arg| arg.to_str())
-        .find(|arg| NIGHTLY_FLAGS.contains(arg) || (!cfg!(windows) && *arg == "--listen"))
+        .find(|arg| DEV_FLAGS.contains(arg) || (!cfg!(windows) && *arg == "--listen"))
 }
 fn main() {
     #[cfg(feature = "desktop")]

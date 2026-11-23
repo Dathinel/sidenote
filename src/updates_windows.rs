@@ -234,21 +234,21 @@ pub const PUBLIC_FEED: &str = "https://github.com/harshanandak/sidenote/releases
 fn public_feed(channel: Channel) -> &'static str {
     match channel {
         Channel::Stable => PUBLIC_FEED,
-        Channel::Nightly => "https://github.com/harshanandak/sidenote/releases/download/nightly/",
+        Channel::Dev => "https://github.com/harshanandak/sidenote/releases/download/dev/",
     }
 }
 
 fn channel_name(channel: Channel) -> &'static str {
     match channel {
         Channel::Stable => "stable",
-        Channel::Nightly => "nightly",
+        Channel::Dev => "dev",
     }
 }
 
 fn selected_channel(root: &Path, fallback: Channel) -> Channel {
     match fs::read(root.join("channel")).as_deref() {
         Ok(b"stable") => Channel::Stable,
-        Ok(b"nightly") => Channel::Nightly,
+        Ok(b"dev") => Channel::Dev,
         _ => fallback,
     }
 }
@@ -1497,15 +1497,15 @@ mod tests {
 
     #[test]
     fn channel_switch_selects_its_feed_and_only_offers_newer_versions() {
-        use Channel::{Nightly, Stable};
+        use Channel::{Dev, Stable};
 
         let stable = "0.1.0";
-        let nightly = "0.1.1-dev.10";
+        let dev = "0.1.1-dev.10";
         let root = tempfile::tempdir().unwrap();
         let path = root.path();
         for (name, versions) in [
             ("stable", [stable, "0.0.1-dev.47"]),
-            ("nightly", ["0.1.1-dev.9", nightly]),
+            ("dev", ["0.1.1-dev.9", dev]),
         ] {
             let assets = versions.map(|version| VelopackAsset {
                 PackageId: "sidenote".into(),
@@ -1530,11 +1530,11 @@ mod tests {
         fs::write(&locator.UpdateExePath, "").unwrap();
         for (installed, default, choice, expected) in [
             ("0.0.1-dev.47", Stable, None, Some(stable)),
-            ("0.1.1-dev.9", Nightly, None, Some(nightly)),
-            (stable, Stable, Some(Nightly), Some(nightly)),
-            (nightly, Nightly, Some(Stable), None),
-            (stable, Nightly, Some(Stable), None),
-            ("0.0.1-dev.47", Nightly, Some(Stable), Some(stable)),
+            ("0.1.1-dev.9", Dev, None, Some(dev)),
+            (stable, Stable, Some(Dev), Some(dev)),
+            (dev, Dev, Some(Stable), None),
+            (stable, Dev, Some(Stable), None),
+            ("0.0.1-dev.47", Dev, Some(Stable), Some(stable)),
         ] {
             fs::write(
                 &locator.ManifestPath,
@@ -1568,7 +1568,7 @@ mod tests {
     fn public_update_feeds_use_sidenote_release_assets() {
         for (channel, expected) in [
             (Channel::Stable, "latest/download/releases.stable.json"),
-            (Channel::Nightly, "download/nightly/releases.nightly.json"),
+            (Channel::Dev, "download/dev/releases.dev.json"),
         ] {
             let source = HttpSource::new(public_feed(channel));
             let url = source.feed_url(channel_name(channel)).unwrap();
