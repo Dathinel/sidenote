@@ -476,7 +476,7 @@ impl State {
             relay_ui: relay::RelayUi::default(),
             button_sheet: false,
             row_sheet: false,
-            annotations: annotations::Annotations::new(prefs.annotations_view),
+            annotations: annotations::Annotations::default().with_view(prefs.annotations_view),
             meeting_ui: meeting::ReadingUi::new(&store.root, &prefs),
             people,
             companies,

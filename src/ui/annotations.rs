@@ -69,11 +69,9 @@ pub struct Annotations {
     other_model: bool,
 }
 impl Annotations {
-    pub(super) fn new(view: usize) -> Self {
-        Self {
-            filmstrip: view == 1,
-            ..Self::default()
-        }
+    pub(super) fn with_view(mut self, view: usize) -> Self {
+        self.filmstrip = view == 1;
+        self
     }
 
     pub(super) fn working(&self) -> bool {
