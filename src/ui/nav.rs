@@ -971,7 +971,8 @@ mod tests {
 
     #[test]
     fn profile_menu_accepts_enter_arrows_and_escape() {
-        use rune::{Env, Key, Runtime};
+        use rune::Key::{Down, Enter, Escape, Tab, Up};
+        use rune::{Env, Runtime};
         crate::test_paths::isolate();
         let view = |s: &State, _: &mut rune::Cx<State>| {
             let mut layer = Vec::new();
@@ -980,12 +981,12 @@ mod tests {
         };
         let mut rt = Runtime::new(State::new(), view, (400.0, 600.0), Env::new(true, 1.0));
         rt.frame(0.0);
-        let [trigger, opened, first, next, back, closed] =
-            [Key::Tab, Key::Enter, Key::Down, Key::Down, Key::Up, Key::Escape].map(|key| {
-                rt.key(key.into());
-                rt.frame(0.016);
-                rt.elements().into_iter().find(|e| e.focused).unwrap()
-            });
+        let keys = [Tab, Enter, Down, Down, Up, Escape];
+        let [trigger, opened, first, next, back, closed] = keys.map(|key| {
+            rt.key(key.into());
+            rt.frame(0.016);
+            rt.elements().into_iter().find(|e| e.focused).unwrap()
+        });
         assert_eq!(trigger.key.as_deref(), Some("profile-button"));
         assert_eq!(opened.role, "menuitem");
         assert_ne!(first.key, next.key);
