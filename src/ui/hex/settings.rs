@@ -2404,7 +2404,6 @@ fn meeting_icon_visibility(s: &State, k: &Kit, p: Palette) -> El {
                     Ok(config) => {
                         s.config = config;
                         s.feature_error = None;
-                        s.hex.shell.saved = Some(Instant::now() + Duration::from_secs(2));
                     }
                     Err(_) => s.feature_error = Some(MEETING_ICON_VISIBILITY_ERROR.into()),
                 }

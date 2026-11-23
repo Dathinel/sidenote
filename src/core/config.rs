@@ -781,12 +781,9 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path();
         assert_eq!(Config::meeting_icon_settings(root), (true, false));
-        let config = Config::load_in(root).unwrap();
-        let mut legacy = serde_json::to_value(config).unwrap();
-        let fields = legacy.as_object_mut().unwrap();
-        fields.remove("meeting_icon_enabled");
         let path = root.join("config.json");
-        store_io::write(&path, &legacy).unwrap();
+        let legacy = br#"{"version":1,"features":{},"notes":{}}"#;
+        std::fs::write(&path, legacy).unwrap();
         assert_eq!(Config::meeting_icon_settings(root), (true, false));
         Config::toggle_meeting_icon(root).unwrap();
         assert_eq!(Config::meeting_icon_settings(root), (false, false));

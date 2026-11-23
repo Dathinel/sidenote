@@ -578,19 +578,15 @@ impl View {
         use crate::meeting_icon::{WINDOW_NUB_ARG, open_window_message};
         unsafe {
             let main = FindWindowW(ptr::null(), wide("Sidenote").as_ptr());
-            if main.is_null() {
-                if let Ok(exe) = std::env::current_exe() {
-                    let _ = std::process::Command::new(exe)
-                        .arg(format!("{WINDOW_NUB_ARG}{}", icon as usize))
-                        .spawn();
-                }
-            } else {
+            if !main.is_null() {
                 let mut process = 0;
                 GetWindowThreadProcessId(main, &mut process);
-                if process != 0 {
-                    AllowSetForegroundWindow(process);
-                }
+                AllowSetForegroundWindow(process);
                 PostMessageW(main, open_window_message(), icon as usize, 0);
+            } else if let Ok(exe) = std::env::current_exe() {
+                let _ = std::process::Command::new(exe)
+                    .arg(format!("{WINDOW_NUB_ARG}{}", icon as usize))
+                    .spawn();
             }
         }
     }

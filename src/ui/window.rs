@@ -93,13 +93,14 @@ pub(super) mod meeting_icon {
     #[derive(Clone, Copy)]
     struct Placement {
         hwnd: HWND,
-        original: [i32; 4],
+        original: WINDOWPLACEMENT,
         placed: [i32; 4],
     }
 
     thread_local! {
         static PLACEMENT: Cell<Option<Placement>> = const { Cell::new(None) };
         static OPEN_LIVE: Cell<Option<Instant>> = const { Cell::new(None) };
+        static MAXIMIZE_ON_FOCUS: Cell<Option<WINDOWPLACEMENT>> = const { Cell::new(None) };
     }
 
     fn rect(hwnd: HWND) -> Option<[i32; 4]> {
@@ -140,24 +141,24 @@ pub(super) mod meeting_icon {
             if GetMonitorInfoW(monitor, &mut info) == 0 {
                 return;
             }
-            let previous = PLACEMENT.take();
-            if IsIconic(hwnd) != 0 {
-                ShowWindow(hwnd, SW_RESTORE);
+            let mut original: WINDOWPLACEMENT = std::mem::zeroed();
+            original.length = size_of::<WINDOWPLACEMENT>() as u32;
+            if GetWindowPlacement(hwnd, &mut original) == 0 {
+                return;
             }
-            let Some(current) = rect(hwnd) else { return };
-            let original = previous
-                .filter(|p| can_restore(p.placed, Some(current)))
-                .map_or(current, |p| p.original);
-            if IsZoomed(hwnd) != 0 {
-                ShowWindow(hwnd, SW_RESTORE);
+            if let Some(saved) = PLACEMENT.take() {
+                original = saved.original;
+            } else if let Some(saved) = MAXIMIZE_ON_FOCUS.take() {
+                original = saved;
             }
+            ShowWindow(hwnd, SW_RESTORE);
             let work = info.rcWork;
+            let height = rect(hwnd).map_or(work.bottom - work.top, |r| r[3]);
             let dpi = GetDpiForWindow(icon).max(96) as i32;
             let target = beside(
                 [work.left, work.top, work.right, work.bottom],
                 icon_rect,
-                400 * dpi / 96,
-                current[3],
+                [400 * dpi / 96, height],
                 8 * dpi / 96,
             );
             if move_window(hwnd, target) {
@@ -167,7 +168,6 @@ pub(super) mod meeting_icon {
                     placed,
                 }));
             }
-            ShowWindow(hwnd, SW_SHOW);
             SetForegroundWindow(hwnd);
             OPEN_LIVE.set(Some(Instant::now()));
             app.update(|_, _| {});
@@ -205,14 +205,33 @@ pub(super) mod meeting_icon {
                 let saved = PLACEMENT.get();
                 PLACEMENT.set(saved.filter(|p| can_restore(p.placed, rect(hwnd))));
             }
+            if msg == WM_ACTIVATE
+                && wp as u16 != WA_INACTIVE as u16
+                && let Some(original) = MAXIMIZE_ON_FOCUS.take()
+            {
+                SetWindowPlacement(hwnd, &original);
+            }
             if msg == WM_NCDESTROY {
                 PLACEMENT.set(None);
                 OPEN_LIVE.set(None);
+                MAXIMIZE_ON_FOCUS.set(None);
                 RemoveWindowSubclass(hwnd, Some(message), id);
                 drop(Box::from_raw(data));
             }
             DefSubclassProc(hwnd, msg, wp, lp)
         }
+    }
+
+    fn restore(saved: Placement) {
+        let mut original = saved.original;
+        let maximized = original.showCmd == SW_SHOWMAXIMIZED as u32;
+        // Maximizing activates the window. Wait until it already has focus.
+        let defer = maximized && unsafe { GetForegroundWindow() } != saved.hwnd;
+        MAXIMIZE_ON_FOCUS.set(defer.then_some(original));
+        if !maximized || defer {
+            original.showCmd = SW_SHOWNOACTIVATE as u32;
+        }
+        unsafe { SetWindowPlacement(saved.hwnd, &original) };
     }
 
     pub(in crate::ui) fn poll(s: &mut State) -> bool {
@@ -230,9 +249,8 @@ pub(super) mod meeting_icon {
         if let Some(Ok(state)) = &s.hex.status
             && finished.contains(&state.meeting_state.as_str())
             && let Some(saved) = PLACEMENT.take()
-            && can_restore(saved.placed, rect(saved.hwnd))
         {
-            move_window(saved.hwnd, saved.original);
+            restore(saved);
         }
         false
     }

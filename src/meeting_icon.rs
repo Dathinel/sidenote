@@ -14,12 +14,8 @@ use std::{
 pub const WINDOW_NUB_ARG: &str = "--open-from-meeting-icon=";
 #[cfg(windows)]
 pub fn open_window_message() -> u32 {
-    static MESSAGE: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
-    *MESSAGE.get_or_init(|| {
-        use windows_sys::{Win32::UI::WindowsAndMessaging::RegisterWindowMessageW, w};
-        let name = w!("Sidenote.OpenFromMeetingIcon.v1");
-        unsafe { RegisterWindowMessageW(name) }
-    })
+    use windows_sys::{Win32::UI::WindowsAndMessaging::RegisterWindowMessageW, w};
+    unsafe { RegisterWindowMessageW(w!("Sidenote.OpenFromMeetingIcon.v1")) }
 }
 
 #[cfg(any(windows, test))]
@@ -28,13 +24,10 @@ pub fn can_restore(placed: [i32; 4], current: Option<[i32; 4]>) -> bool {
 }
 
 #[cfg(any(windows, test))]
-pub fn beside(
-    [left, top, right, bottom]: [i32; 4],
-    [x, y, icon_width, _]: [i32; 4],
-    width: i32,
-    height: i32,
-    gap: i32,
-) -> [i32; 4] {
+pub fn beside(work: [i32; 4], icon: [i32; 4], size: [i32; 2], gap: i32) -> [i32; 4] {
+    let [left, top, right, bottom] = work;
+    let [x, y, icon_width, _] = icon;
+    let [width, height] = size;
     let width = width.min(right - left);
     let height = height.min(bottom - top);
     let right_of_icon = x + icon_width + gap;
@@ -43,12 +36,9 @@ pub fn beside(
     } else {
         x - gap - width
     };
-    [
-        x.clamp(left, right - width),
-        y.clamp(top, bottom - height),
-        width,
-        height,
-    ]
+    let x = x.clamp(left, right - width);
+    let y = y.clamp(top, bottom - height);
+    [x, y, width, height]
 }
 
 #[derive(Clone, Default, Deserialize, Serialize)]
@@ -611,7 +601,7 @@ mod tests {
             (work, [1278, 330, 46, 109], [870, 180, 400, 680]),
             (small, [-56, 340, 46, 109], [-350, 20, 350, 400]),
         ] {
-            assert_eq!(beside(work, icon, 400, 680, 8), expected);
+            assert_eq!(beside(work, icon, [400, 680], 8), expected);
         }
     }
 
