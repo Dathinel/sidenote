@@ -1856,12 +1856,12 @@ fn poll(s: &mut State, clock: f64, tx: &mut Tx) -> bool {
         .unwrap_or(0);
     changed |= minute != s.footer_minute;
     s.footer_minute = minute;
-    // The Ask bar opens and folds in a commit of its own, so it moves instead of jumping.
-    if s.ask_open != s.question.focused {
+    let ask_open = ask::focus_open(s, tx);
+    if s.ask_open != ask_open {
         if s.question.focused {
             s.ask_settings.warm_signature.clear();
         }
-        s.ask_open = s.question.focused;
+        s.ask_open = ask_open;
         changed = true;
     }
     if !headless {
