@@ -10,7 +10,7 @@ use super::{
     roles,
     tasks::View,
     theme::Palette,
-    widgets::{hairline, keycap, pressable},
+    widgets::{ButtonRole, button, hairline, keycap, pressable},
 };
 use rune::{El, Key, KeyEvent, ScrollSpec, TextEdit, Tx, col, el, row};
 use rune_kit::{Kit, TextInput};
@@ -339,8 +339,8 @@ impl State {
         self.question.focused = true;
     }
 
-    /// Tab: the typed text becomes a question in the Ask bar.
-    fn finder_tab(&mut self) {
+    /// The typed text becomes a question in the Ask bar.
+    fn finder_ask_query(&mut self) {
         if !self.has_agent() {
             return;
         }
@@ -364,7 +364,7 @@ pub fn key(s: &mut State, e: &KeyEvent, tx: &mut Tx) -> bool {
             let at = s.finder.as_ref().map_or(0, |f| f.cursor);
             s.finder_run(at, tx);
         }
-        Key::Tab => s.finder_tab(),
+        Key::Tab => s.finder_ask_query(),
         _ => return false,
     }
     true
@@ -419,6 +419,8 @@ fn hint(cap: &str, words: &str, p: Palette) -> El {
 /// The palette over the whole window, or nothing while it is closed.
 pub fn overlay(s: &State, k: &Kit, p: Palette, narrow: bool) -> Option<El> {
     let f = s.finder.as_ref()?;
+    let has_results = !f.entries.is_empty();
+    let has_agent = s.has_agent();
     let input = TextInput::new(&s.finder_query)
         .plain()
         .placeholder("Search or jump to")
@@ -447,29 +449,31 @@ pub fn overlay(s: &State, k: &Kit, p: Palette, narrow: bool) -> Option<El> {
         }
         list = list.child(result_row(i, e, i == f.cursor, p));
     }
-    if f.entries.is_empty() {
-        list = list.child(
-            roles::SMALL
-                .wrap(
-                    if s.has_agent() {
-                        "Nothing matches. Press Tab to ask your agent."
-                    } else {
-                        "Nothing matches."
-                    },
-                    p.soft,
+    if !has_results {
+        let mut empty = col()
+            .px(12.0)
+            .py(12.0)
+            .gap(8.0)
+            .child(roles::SMALL.wrap("Nothing matches.", p.soft));
+        if has_agent {
+            empty = empty.child(
+                button(
+                    "Ask your agent",
+                    "finder-ask-query",
+                    ButtonRole::Secondary,
+                    p,
                 )
-                .px(12.0)
-                .py(16.0),
-        );
+                .self_start()
+                .on_press(State::finder_ask_query),
+            );
+        }
+        list = list.child(empty);
     }
-    let mut foot = row()
-        .w_full()
-        .gap(16.0)
-        .items_center()
-        .px(16.0)
-        .py(9.0)
-        .child(hint("Enter", "Open", p));
-    if s.has_agent() {
+    let mut foot = row().w_full().gap(16.0).items_center().px(16.0).py(9.0);
+    if has_results {
+        foot = foot.child(hint("Enter", "Open", p));
+    }
+    if has_agent {
         foot = foot.child(hint("Tab", "Ask your agent", p));
     }
     foot = foot.child(hint("Esc", "Close", p));
@@ -520,4 +524,60 @@ pub fn overlay(s: &State, k: &Kit, p: Palette, narrow: bool) -> Option<El> {
                     .child(card),
             ),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_results_offer_ask_by_pointer_or_tab() {
+        crate::test_paths::isolate();
+        let mut state = State::new();
+        state.ask_settings.connection.settings.enabled = true;
+        state.open_finder();
+        let mut rt = rune::Runtime::new(
+            state,
+            |s: &State, _| {
+                let p = super::super::theme::palette(true);
+                overlay(s, &super::super::theme::kit(&p), p, true).unwrap_or_else(el)
+            },
+            (390.0, 900.0),
+            rune::Env::default(),
+        );
+        rt.frame(0.0);
+        let has_open_hint = |rt: &rune::Runtime<State>| {
+            rt.elements()
+                .iter()
+                .any(|node| node.text.as_deref() == Some("Open"))
+        };
+        assert!(has_open_hint(&rt));
+        assert!(rt.find("finder-ask-query").is_none());
+
+        const QUERY: &str = "zebra";
+        for by_pointer in [true, false] {
+            rt.update(|s, _| {
+                s.open_finder();
+                s.finder_query.text = format!(" {QUERY} ");
+                s.finder_changed();
+            });
+            rt.frame(0.2);
+            assert!(!has_open_hint(&rt));
+            let (x, y) = rt.find("finder-ask-query").expect("empty-state Ask button");
+            if by_pointer {
+                rt.pointer_move(x, y);
+                rt.pointer_down(x, y);
+                rt.pointer_up(x, y);
+            } else {
+                rt.key(KeyEvent {
+                    key: Key::Tab,
+                    mods: rune::Mods::default(),
+                });
+            }
+            rt.frame(0.2);
+            assert!(rt.state.finder.is_none());
+            assert_eq!(rt.state.question.text, QUERY);
+            assert!(rt.state.question.focused);
+        }
+    }
 }
