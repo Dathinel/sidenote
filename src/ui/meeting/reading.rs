@@ -266,7 +266,7 @@ fn view_switch(s: &State, k: &Kit, p: Palette) -> El {
                 .grid_cell(selected),
         )
         .children(
-            [(Tab::Summary, "Notes"), (Tab::Notes, "Your notes")]
+            [(Tab::Summary, "Summary"), (Tab::Notes, "Your notes")]
                 .into_iter()
                 .enumerate()
                 .map(|(index, (tab, name))| {
@@ -924,7 +924,24 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
     // With no gutter and the tasks stacked, their rows hang 8 either side of the column, so the
     // scroll area is 8 wider each side there, as the tasks column's is on the wide grid.
     let hang = if strip && !wide { 8.0 } else { 0.0 };
-    let fade = (150.0 - s.overlay_h.get()).max(0.0);
+    let phone_sheet = s.transcript_open && super::phone(s);
+    let fade = if phone_sheet {
+        28.0
+    } else if s.transcript_open {
+        0.0
+    } else {
+        (150.0 - s.overlay_h.get()).max(0.0)
+    };
+    let fade_opacity = if phone_sheet {
+        1.0
+    } else {
+        (fade / 75.0).min(1.0)
+    };
+    let bottom_pad = if s.transcript_open {
+        fade + 32.0
+    } else {
+        s.overlay_h.get().max(fade) + 32.0
+    };
     let mut doc = narrative(s, m, p);
     if !wide {
         let inset = if s.app_w.get() < super::PHONE {
@@ -967,23 +984,20 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
                     doc.max_w(COLUMN + 2.0 * (side + hang))
                         .px(side + hang)
                         .pt(6.0)
-                        .pb(s.overlay_h.get() + 32.0),
+                        .pb(bottom_pad),
                     "meeting-scroll",
                 )
                 .grow(1.0),
             )
-            // The fade is 150 from the window bottom. The Ask stack sits below the scroll area
-            // here, so only the part above it is drawn; with a thread open there is none.
+            // The Ask stack sits below the scroll area. On a phone, fade to the page color
+            // before the transcript dock so the clipped document does not run into the sheet.
             .child(
                 el().key("meeting-scroll-fade")
                     .pin(Some(0.0), None, Some(0.0), Some(0.0))
                     .h(fade)
                     .linear_gradient(
                         std::f32::consts::PI,
-                        [
-                            (0.0, p.bg.alpha(0.0)),
-                            (1.0, p.bg.alpha((fade / 75.0).min(1.0))),
-                        ],
+                        [(0.0, p.bg.alpha(0.0)), (1.0, p.bg.alpha(fade_opacity))],
                     ),
             ),
     );
@@ -1006,6 +1020,12 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
             .shrink()
             .px(side)
             .pb(36.0)
+            .children(phone_sheet.then(|| {
+                hairline(p)
+                    .key("meeting-transcript-divider")
+                    .w_full()
+                    .mb(8.0)
+            }))
             .child(
                 col()
                     .key("meeting-transcript-surface")
@@ -1017,7 +1037,22 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
                     .border(1.0, p.line)
                     .child(panel)
                     .child(hairline(p))
-                    .child(control.self_start()),
+                    .child(
+                        row()
+                            .w_full()
+                            .items_center()
+                            .justify_between()
+                            .child(control)
+                            .child(
+                                quiet_button("Hide transcript", "meeting-hide-transcript", p)
+                                    .h(36.0)
+                                    .mr(8.0)
+                                    .on_press_tx(|s: &mut State, tx| {
+                                        s.close_transcript_sheet();
+                                        tx.focus("meeting-transcript", true);
+                                    }),
+                            ),
+                    ),
             )
     } else {
         ask::overlay_with(s, k, p, narrow, layer, Some(control), None)
@@ -1125,5 +1160,94 @@ pub fn scene_publication(s: &mut State, home: bool) {
     }));
     if home {
         s.go_home();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ui::{theme, view};
+    use rune::{Env, Runtime, text::TextSystem};
+
+    fn element(rt: &Runtime<State>, key: &str) -> rune::ElementInfo {
+        rt.elements()
+            .into_iter()
+            .find(|element| element.key.as_deref() == Some(key))
+            .unwrap_or_else(|| panic!("missing {key}"))
+    }
+
+    #[test]
+    fn reading_labels_its_views_and_keeps_the_transcript_dismissible() {
+        const ID: &str = "1800000000142-997";
+        const LAST_NOTE: &str = "Review the last question.";
+        crate::test_paths::isolate();
+        let folder = core::meetings_dir().join(ID);
+        std::fs::create_dir_all(&folder).unwrap();
+        let summary = serde_json::json!({
+            "title": "Launch review",
+            "verify": vec!["Check the launch date with the team."; 30],
+        });
+        std::fs::write(folder.join("english-summary.json"), summary.to_string()).unwrap();
+        let notes = format!("{}\n{LAST_NOTE}", "Check the schedule.\n".repeat(30));
+        std::fs::write(folder.join("notes.md"), notes).unwrap();
+
+        for width in [390.0, 1334.0] {
+            let mut state = State::new();
+            state.meeting_ui.tabs = false;
+            state.selected = Some(ID.into());
+            state.load_saved();
+            let mut rt = Runtime::with_text(
+                state,
+                view,
+                (width, 600.0),
+                Env::default(),
+                TextSystem::new(theme::fonts(), (theme::SANS, "Inter")),
+            );
+            rt.settle_all();
+            rt.frame(0.0);
+            assert_eq!(element(&rt, "segment0").label.as_deref(), Some("Summary"));
+            assert_eq!(
+                element(&rt, "segment1").label.as_deref(),
+                Some("Your notes")
+            );
+
+            for tab in [Tab::Summary, Tab::Notes] {
+                rt.update(|s, _| s.set_meeting_tab(tab));
+                rt.frame(0.0);
+                rt.update(|_, tx| tx.scroll_to_bottom_instant("meeting-scroll"));
+                rt.settle_all();
+                rt.frame(0.0);
+                let last_line = if tab == Tab::Summary {
+                    element(&rt, "verify-29")
+                } else {
+                    rt.elements()
+                        .into_iter()
+                        .find(|item| item.text.as_deref() == Some(LAST_NOTE))
+                        .unwrap()
+                };
+                let viewport = element(&rt, "meeting-scroll");
+                let fade = element(&rt, "meeting-scroll-fade");
+                assert!(last_line.rect[1] >= viewport.rect[1]);
+                assert!(last_line.rect[1] + last_line.rect[3] <= fade.rect[1]);
+            }
+
+            rt.update(|s, _| s.toggle_transcript());
+            rt.settle_all();
+            rt.frame(0.0);
+            if width == 390.0 {
+                let divider = element(&rt, "meeting-transcript-divider").rect;
+                let sheet = element(&rt, "meeting-transcript-surface").rect;
+                assert!(divider[1] + divider[3] < sheet[1]);
+            }
+            let hide = element(&rt, "meeting-hide-transcript");
+            assert!(hide.focusable);
+            assert_eq!(hide.label.as_deref(), Some("Hide transcript"));
+            let [x, y, w, h] = hide.rect;
+            rt.pointer_down(x + w / 2.0, y + h / 2.0);
+            rt.pointer_up(x + w / 2.0, y + h / 2.0);
+            rt.frame(0.0);
+            assert!(!rt.state.transcript_open);
+            assert!(element(&rt, "meeting-transcript").focused);
+        }
     }
 }
