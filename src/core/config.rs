@@ -866,6 +866,7 @@ mod tests {
         assert!(!relay_busy(&mut state, true, later));
     }
     #[cfg(windows)]
+    #[cfg(feature = "nightly")]
     fn relay_fixture(root: &Path) {
         std::fs::create_dir_all(root.join("local/relay")).unwrap();
         store_io::write(
@@ -881,6 +882,7 @@ mod tests {
     }
     #[test]
     #[cfg(windows)]
+    #[cfg(feature = "nightly")]
     fn held_replica_lock_defers_notes_overlay_then_retries() {
         let root = tempfile::tempdir().unwrap();
         relay_fixture(root.path());
@@ -913,6 +915,7 @@ mod tests {
     }
     #[test]
     #[cfg(windows)]
+    #[cfg(feature = "nightly")]
     fn corrupt_replica_does_not_defer_or_use_stale_notes_name() {
         let root = tempfile::tempdir().unwrap();
         relay_fixture(root.path());

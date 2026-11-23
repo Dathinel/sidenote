@@ -13,12 +13,41 @@ fn default_test_paths_are_isolated_from_owner_appdata() {
 }
 #[cfg(feature = "desktop")]
 mod ui;
+fn unavailable_in_stable(args: &[std::ffi::OsString]) -> Option<&str> {
+    const NIGHTLY_FLAGS: &[&str] = &[
+        "--server",
+        "--speech-worker",
+        "--speech-port",
+        "--sync-control",
+        "--mcp",
+        "--mcp-access",
+        "--mcp-port",
+        "--ops",
+        "--cpu-models",
+        "--relay-preview-headless",
+    ];
+    if args
+        .windows(2)
+        .any(|pair| pair[0] == "--device-role" && (pair[1] == "server" || pair[1] == "hub"))
+    {
+        return Some("Server or hub mode");
+    }
+    args.iter()
+        .filter_map(|arg| arg.to_str())
+        .find(|arg| NIGHTLY_FLAGS.contains(arg) || (!cfg!(windows) && *arg == "--listen"))
+}
 fn main() {
-    #[cfg(target_os = "linux")]
-    sidenote::platform::supervisor_entry();
     #[cfg(feature = "desktop")]
     let process_started = std::time::Instant::now();
     let args: Vec<_> = std::env::args_os().skip(1).collect();
+    if matches!(sidenote::core::CHANNEL, sidenote::core::Channel::Stable)
+        && let Some(arg) = unavailable_in_stable(&args)
+    {
+        eprintln!("{arg} is unavailable in Sidenote Stable.");
+        std::process::exit(2);
+    }
+    #[cfg(target_os = "linux")]
+    sidenote::platform::supervisor_entry();
     #[cfg(all(windows, feature = "idle-cpu-proof"))]
     if args.iter().any(|a| a == "--idle-cpu-seed-notes") {
         let result = sidenote::core::configure_paths(&args)

@@ -126,6 +126,9 @@ impl Agent {
         agent
     }
     pub fn add(&self, exe: &Path) -> Result<String, String> {
+        if matches!(super::super::CHANNEL, super::super::Channel::Stable) {
+            return Err(super::STABLE_UNAVAILABLE.into());
+        }
         if self.status == Status::NotInstalled {
             return Err("This app is not installed.".into());
         }

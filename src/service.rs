@@ -112,6 +112,19 @@ pub fn configure(args: &[OsString]) -> Result<(), &'static str> {
             });
         }
     }
+    if matches!(crate::core::CHANNEL, crate::core::Channel::Stable) {
+        if selected.is_some_and(|role| role != DeviceRole::Full) {
+            return Err("Server and hub roles are unavailable in Sidenote Stable.");
+        }
+        if load_role(&crate::core::state_dir()).is_ok_and(|role| role != DeviceRole::Full) {
+            eprintln!(
+                "Saved server or hub role is unavailable in Sidenote Stable. Starting in full mode."
+            );
+        }
+        return ROLE
+            .set(DeviceRole::Full)
+            .map_err(|_| "DEVICE_CONFIG_FAILED");
+    }
     #[cfg(windows)]
     let configured = selected
         .map(crate::core::DeviceSettings::set_role)
@@ -302,6 +315,12 @@ fn supervise() {
 }
 
 pub fn run() -> i32 {
+    if matches!(crate::core::CHANNEL, crate::core::Channel::Stable)
+        && !(cfg!(windows) && std::env::args_os().any(|arg| arg == "--listen"))
+    {
+        eprintln!("Server mode is unavailable in Sidenote Stable.");
+        return 2;
+    }
     #[cfg(target_os = "linux")]
     if std::env::args_os().any(|a| a == "--speech-worker" || a == "--speech-port") {
         return speech::run();

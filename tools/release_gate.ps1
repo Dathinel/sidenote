@@ -12,7 +12,8 @@ links full logs in artifacts\release-gate-<commit>\, and exits 1 if any check fa
 #>
 param(
     [string]$GnuBin,
-    [switch]$PreflightOnly
+    [switch]$PreflightOnly,
+    [ValidateSet('stable', 'nightly')] [string]$Channel = 'stable'
 )
 $ErrorActionPreference = 'Continue'
 $MinFreeGb = 60
@@ -27,6 +28,22 @@ if (-not $top -or ((Resolve-Path $top).Path.TrimEnd('\') -ne $root.TrimEnd('\'))
 if (-not (Test-Path (Join-Path $root 'Cargo.toml')) -or -not (Test-Path (Join-Path $root 'relay'))) {
     Write-Output 'release_gate: Cargo.toml or relay\ is missing; this is not a Sidenote worktree.'
     exit 2
+}
+if ($Channel -eq 'stable' -and -not (Test-Path -LiteralPath 'tests/channel_boundary.rs')) {
+    Write-Output 'release_gate: Stable release gate needs S2 (channel_boundary integration test).'
+    exit 2
+}
+if ($Channel -eq 'nightly') {
+    try {
+        $nightly = Invoke-RestMethod -Uri 'https://api.github.com/repos/harshanandak/sidenote/releases/tags/nightly' -TimeoutSec 5 -ErrorAction Stop
+    } catch {
+        # A fresh channel has no release yet. Existing releases must be prereleases.
+        if ([int]$_.Exception.Response.StatusCode -ne 404) { throw }
+    }
+    if ($nightly -and $nightly.prerelease -ne $true) {
+        Write-Output 'release_gate: the nightly GitHub release must be a prerelease.'
+        exit 2
+    }
 }
 if (-not $PreflightOnly) {
     if (-not $PSBoundParameters.ContainsKey('GnuBin')) {
@@ -104,6 +121,7 @@ $env:PATH = "$GnuBin;" + $env:PATH
 $env:SIDENOTE_GNU_BIN = $GnuBin
 # Always this worktree's own build folder. A shared folder can hold another worktree's exe.
 $env:CARGO_TARGET_DIR = Join-Path $root 'target'
+$env:SIDENOTE_RELEASE_CHANNEL = $Channel
 $version = (Select-String -Path (Join-Path $root 'Cargo.toml') -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
 $started = Get-Date
 $artifacts = Join-Path $root 'artifacts'
@@ -115,7 +133,17 @@ function Gate([string]$Name, [scriptblock]$Run) {
     $t0 = Get-Date
     $log = Join-Path $logDirectory "$Name.log"
     # Capture OS handles too: local_build's cargo child bypasses PowerShell streams.
-    $command = '$ErrorActionPreference = "Continue"; & { ' + $Run.ToString() + ' }; exit $LASTEXITCODE'
+    $channelSetup = {
+        $channelArgs = @()
+        $asrFeatures = 'asr-runtime'
+        $settingsRender = 'artifacts/settings-build-stable'
+        if ($env:SIDENOTE_RELEASE_CHANNEL -eq 'nightly') {
+            $channelArgs = @('--features', 'nightly')
+            $asrFeatures += ',nightly'
+            $settingsRender = 'artifacts/settings-build'
+        }
+    }
+    $command = '$ErrorActionPreference = "Continue"; . { ' + $channelSetup + ' }; & { ' + $Run.ToString() + ' }; exit $LASTEXITCODE'
     $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
     $process = Start-Process -FilePath (Get-Command powershell.exe).Source `
         -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-OutputFormat', 'Text', '-EncodedCommand', $encoded) `
@@ -175,20 +203,25 @@ Gate 'linux-boundaries' { python tools/prove_linux_boundaries.py . --self-test }
 Gate 'pipeline-install-dryrun' { python tools/pipeline-install-dryrun.py }
 Gate 'build-arguments' { powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/local-build-tests.ps1 }
 Gate 'fmt' { & tools/local_build.ps1 +stable-x86_64-pc-windows-gnu fmt --check }
-Gate 'clippy' { & tools/local_build.ps1 +stable-x86_64-pc-windows-gnu clippy --locked --all-targets -j 1 '--' -D warnings }
-Gate 'clippy-asr' { & tools/local_build.ps1 +stable-x86_64-pc-windows-gnu clippy --locked --all-targets --features asr-runtime -j 1 '--' -D warnings }
-Gate 'test' { & tools/local_build.ps1 +stable-x86_64-pc-windows-gnu test --locked --no-fail-fast -j 1 --quiet }
-Gate 'test-asr' { & tools/local_build.ps1 +stable-x86_64-pc-windows-gnu test --locked --no-fail-fast -j 1 --quiet --features asr-runtime }
-Gate 'public-cpu-audio' { & tools/local_build.ps1 +stable-x86_64-pc-windows-gnu test --locked -p sidenote --features asr-runtime --test public_cpu_audio '--' --ignored --nocapture }
+Gate 'clippy' { & tools/local_build.ps1 +stable-x86_64-pc-windows-gnu clippy --locked --all-targets -j 1 @channelArgs '--' -D warnings }
+Gate 'clippy-asr' { & tools/local_build.ps1 +stable-x86_64-pc-windows-gnu clippy --locked --all-targets --features $asrFeatures -j 1 '--' -D warnings }
+Gate 'test' { & tools/local_build.ps1 +stable-x86_64-pc-windows-gnu test --locked --no-fail-fast -j 1 --quiet @channelArgs }
+Gate 'test-asr' { & tools/local_build.ps1 +stable-x86_64-pc-windows-gnu test --locked --no-fail-fast -j 1 --quiet --features $asrFeatures }
+Gate 'public-cpu-audio' { & tools/local_build.ps1 +stable-x86_64-pc-windows-gnu test --locked -p sidenote --features $asrFeatures --test public_cpu_audio '--' --ignored --nocapture }
 (Get-Item (Join-Path $root 'src\main.rs')).LastWriteTime = Get-Date
-Gate 'build-locked' { & tools/local_build.ps1 +stable-x86_64-pc-windows-gnu build --locked -j 1 }
+Gate 'build-locked' { & tools/local_build.ps1 +stable-x86_64-pc-windows-gnu build --locked -j 1 @channelArgs }
 Gate 'mcp-smoke' {
     $exe = Join-Path $env:CARGO_TARGET_DIR 'x86_64-pc-windows-gnu\debug\sidenote.exe'
     if (-not (Test-Path $exe)) { $exe = Join-Path $env:CARGO_TARGET_DIR 'debug\sidenote.exe' }
-    python tools/mcp-smoke.py $exe
+    $smokeArgs = @($exe)
+    if ($env:SIDENOTE_RELEASE_CHANNEL -eq 'stable') { $smokeArgs += '--stable' }
+    python tools/mcp-smoke.py @smokeArgs
 }
-Gate 'settings-render' { python tools/render_settings_build.py }
-Gate 'settings-reachability' { python tools/settings-reachability.py artifacts/settings-build }
+if ($Channel -eq 'stable') {
+    Gate 'stable-boundary' { & tools/local_build.ps1 +stable-x86_64-pc-windows-gnu test --locked --test channel_boundary }
+}
+Gate 'settings-render' { python tools/render_settings_build.py --channel $env:SIDENOTE_RELEASE_CHANNEL --output $settingsRender }
+Gate 'settings-reachability' { python tools/settings-reachability.py $settingsRender --channel $env:SIDENOTE_RELEASE_CHANNEL }
 Push-Location (Join-Path $root 'relay')
 Gate 'relay-tests' { bun test tests }
 Pop-Location
@@ -203,7 +236,7 @@ if ($recorderLost) {
 }
 $failed = @($rows | Where-Object { $_.Exit -ne 0 })
 $lines = @(
-    "# Release gate: Sidenote $version ($commit)",
+    "# Release gate: Sidenote $version ($Channel, $commit)",
     '',
     "Started $($started.ToString('yyyy-MM-dd HH:mm:ss zzz')), finished $((Get-Date).ToString('HH:mm:ss')) local time.",
     '',

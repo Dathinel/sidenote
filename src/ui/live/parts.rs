@@ -6,7 +6,7 @@ use sidenote::core::{
 };
 impl State {
     pub(in crate::ui) fn parts_sync(&mut self) {
-        if self.live.as_ref().is_some_and(|l| l.scene) {
+        if self.hex_stop_pending() || self.live.as_ref().is_some_and(|l| l.scene) {
             return;
         }
         let root = core::state_dir();
@@ -166,6 +166,9 @@ impl State {
         }
     }
     pub(super) fn parts_drop_unstarted(&mut self, closing: bool) -> bool {
+        if self.hex_stop_pending() {
+            return false;
+        }
         let Some(live) = &mut self.live else {
             return false;
         };
@@ -237,6 +240,9 @@ impl State {
         self.request_refresh();
     }
     pub(in crate::ui) fn meeting_pause(&mut self) {
+        if self.hex_stop_pending() {
+            return;
+        }
         // Persist ownership before Stop can produce a completion event.
         self.parts_sync();
         if self
@@ -295,6 +301,9 @@ impl State {
         true
     }
     pub(in crate::ui) fn meeting_resume(&mut self) {
+        if self.hex_stop_pending() {
+            return;
+        }
         if self.hex_status_unknown() {
             self.hex_recheck_resume();
             return;
@@ -330,6 +339,9 @@ impl State {
         self.hex_record_start();
     }
     pub(in crate::ui) fn meeting_generate(&mut self) {
+        if self.hex_stop_pending() {
+            return;
+        }
         if !self.parts_select() {
             return;
         }

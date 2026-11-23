@@ -3,7 +3,7 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot
 $temp = Join-Path ([IO.Path]::GetTempPath()) ('local-build-test-' + [guid]::NewGuid().ToString('N'))
 $saved = @{}
-foreach ($name in 'PATH','APPDATA','LOCALAPPDATA','CARGO_BUILD_JOBS','CARGO_TARGET_DIR','CARGO_BUILD_TARGET_DIR') {
+foreach ($name in 'PATH','APPDATA','LOCALAPPDATA','CARGO_BUILD_JOBS','CARGO_TARGET_DIR','CARGO_BUILD_TARGET_DIR','SIDENOTE_RELEASE_CHANNEL') {
     $saved[$name] = [Environment]::GetEnvironmentVariable($name)
 }
 function Get-CimInstance {
@@ -98,24 +98,45 @@ class CargoArgs {
     $env:CARGO_TARGET_DIR = Join-Path $fallback 'fallback'
     $env:CARGO_BUILD_TARGET_DIR = Join-Path $fallback 'other-fallback'
     $gate = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'release_gate.ps1'))
+    $channelSetup = [ScriptBlock]::Create($gate).Ast.Find({
+        param($node)
+        $node -is [Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -ceq '$channelSetup'
+    }, $true)
+    if (-not $channelSetup) { throw 'Expected the release gate channel setup.' }
     $calls = [regex]::Matches($gate, "(?m)^Gate 'clippy(?:-asr)?' \{ (& tools/local_build.ps1 .+) \}\r?$")
     if ($calls.Count -ne 2) { throw 'Expected both Clippy gate calls.' }
-    $commands = @($calls | ForEach-Object { $_.Groups[1].Value })
-    $commands += "& tools/local_build.ps1 clippy --target-dir 'target with spaces\' '--' -D warnings --config tool-only"
-    $commands += "& tools/local_build.ps1 clippy '--target-dir=target equals' '--' -D warnings"
-    foreach ($command in $commands) {
+    $prefix = @('+stable-x86_64-pc-windows-gnu', 'clippy', '--locked', '--all-targets')
+    $suffix = @('--', '-D', 'warnings')
+    $cases = @(foreach ($channel in 'stable', 'nightly') {
+        $clippy = @('-j', '1')
+        $asr = 'asr-runtime'
+        if ($channel -eq 'nightly') {
+            $clippy += @('--features', 'nightly')
+            $asr = 'asr-runtime,nightly'
+        }
+        @{ Channel = $channel; Command = $calls[0].Groups[1].Value; Expected = $prefix + $clippy + $suffix }
+        @{ Channel = $channel; Command = $calls[1].Groups[1].Value; Expected = $prefix + @('--features', $asr, '-j', '1') + $suffix }
+    })
+    $cases += @{ Channel = 'stable'; Command = "& tools/local_build.ps1 clippy --target-dir 'target with spaces\' '--' -D warnings --config tool-only" }
+    $cases += @{ Channel = 'stable'; Command = "& tools/local_build.ps1 clippy '--target-dir=target equals' '--' -D warnings" }
+    foreach ($case in $cases) {
+        $command = $case.Command
+        $env:SIDENOTE_RELEASE_CHANNEL = $case.Channel
         Write-MeetingStatus idle
-        $output = @(& powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ($processMock + $command))
+        $output = @(& powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ($processMock + '. ' + $channelSetup.Right.Extent.Text + '; ' + $command))
         if ($LASTEXITCODE) { throw "Wrapper exited $LASTEXITCODE" }
         $expectedJobs = if ($command -match ' -j 1 ') { 'jobs:' } else { 'jobs:4' }
         if ($output -cnotcontains $expectedJobs) { throw "Wrong Cargo jobs default: $command" }
         $actual = @($output | Where-Object { $_.StartsWith('arg:') } | ForEach-Object {
             [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_.Substring(4)))
         })
-        $tokens = [Management.Automation.PSParser]::Tokenize($command, [ref]$null)
-        $expected = @($tokens | Select-Object -Skip 2 | ForEach-Object { $_.Content })
+        $expected = $case.Expected
+        if (-not $expected) {
+            $tokens = [Management.Automation.PSParser]::Tokenize($command, [ref]$null)
+            $expected = @($tokens | Select-Object -Skip 2 | ForEach-Object { $_.Content })
+        }
         if (($actual | ConvertTo-Json -Compress) -cne ($expected | ConvertTo-Json -Compress)) {
-            throw "Native argument mismatch: $command"
+            throw "Native argument mismatch on $($case.Channel): $command"
         }
         $target = if ($command.Contains('--target-dir=')) { Join-Path $root 'target equals' }
                   elseif ($command.Contains('--target-dir ')) { Join-Path $root 'target with spaces\' }

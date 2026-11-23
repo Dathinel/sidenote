@@ -1223,6 +1223,10 @@ fn meeting_icon_capture_destination() -> Destination {
 }
 
 fn index(s: &State) -> Vec<Destination> {
+    index_for_channel(s, CHANNEL)
+}
+
+fn index_for_channel(s: &State, channel: Channel) -> Vec<Destination> {
     let mut entries = app_index();
     entries.extend(AppFeature::EXPERIMENTAL.map(|feature| {
         entry(
@@ -1311,7 +1315,7 @@ fn index(s: &State) -> Vec<Destination> {
     );
     let mut seen = HashSet::new();
     entries.retain(|dest| {
-        dest.page.visible(CHANNEL) && seen.insert((dest.key.clone(), dest.page.name(), dest.tab))
+        dest.page.visible(channel) && seen.insert((dest.key.clone(), dest.page.name(), dest.tab))
     });
     for alias in legacy_aliases() {
         if let Some(dest) = entries.iter_mut().find(|d| d.key == alias.target) {
@@ -3491,6 +3495,7 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
+    #[cfg(feature = "nightly")]
     fn saving_the_device_name_is_blocked_while_pairing_is_busy() {
         let root = tempfile::tempdir().unwrap();
         let mut s = State::new();
@@ -3523,6 +3528,7 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
+    #[cfg(feature = "nightly")]
     fn linux_relay_settings_refuse_enable_and_allow_local_device_rename() {
         use sidenote::core::relay_preview::Settings;
 
@@ -3675,26 +3681,17 @@ mod tests {
         assert_eq!(rows.len(), 50);
         let fixture: Fixture =
             serde_json::from_str(include_str!("../../../tools/ui-fixtures/hex.json")).unwrap();
-        let mut entries = app_index();
-        entries.push(meeting_icon_capture_destination());
-        for st in fixture.settings {
-            let (page, tab, advanced) = location(&st);
-            let key = if matches!(
-                st.key.as_str(),
-                "meetings.audio_retention" | "labs.expire_meeting_audio"
-            ) {
-                "keep-audio".into()
-            } else {
-                format!("hs-{}", st.key)
-            };
-            entries.push(entry(
-                &key,
-                &setting_name(&st),
-                &st.key,
-                page,
-                tab,
-                advanced,
-            ));
+        let mut state = State::new();
+        state.hex.settings = fixture.settings;
+        for feature in AppFeature::EXPERIMENTAL {
+            if !state.config.features.enabled(feature) {
+                state.config.features.toggle(feature);
+            }
+        }
+        // The legacy map includes Nightly destinations and the Windows capture setting.
+        let mut entries = index_for_channel(&state, Channel::Nightly);
+        if !cfg!(windows) {
+            entries.push(meeting_icon_capture_destination());
         }
         for row in rows {
             let key = row["key"].as_str().unwrap();

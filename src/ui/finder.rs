@@ -139,17 +139,19 @@ fn entries(s: &State, query: &str) -> Vec<Entry> {
         ));
     }
     for company in s.companies.data.catalog.records.values().filter(|c| {
-        f.people
-            && (!typed
-                || contains(
-                    &format!(
-                        "{} {} {}",
-                        c.name,
-                        c.domain.as_deref().unwrap_or_default(),
-                        c.aliases.join(" ")
-                    ),
-                    &q,
-                ))
+        if !f.people {
+            return false;
+        }
+        !typed
+            || contains(
+                &format!(
+                    "{} {} {}",
+                    c.name,
+                    c.domain.as_deref().unwrap_or_default(),
+                    c.aliases.join(" ")
+                ),
+                &q,
+            )
     }) {
         pages.push(page(
             &company.name,

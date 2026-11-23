@@ -177,7 +177,12 @@ fn run_within(
         stderr,
     })
 }
+const STABLE_UNAVAILABLE: &str = "External MCP is unavailable in Sidenote Stable.";
+
 pub fn add_to_claude(exe: &Path) -> Result<String, String> {
+    if matches!(super::CHANNEL, super::Channel::Stable) {
+        return Err(STABLE_UNAVAILABLE.into());
+    }
     let cli = claude()?;
     register(exe, |args| run(&cli, args))
 }
