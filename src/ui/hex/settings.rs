@@ -8,6 +8,12 @@ mod engine;
 #[cfg(windows)]
 mod host;
 
+const DRAWER_AT: f32 = 600.0;
+const LIST_WIDE: f32 = 240.0;
+const LIST_ROW_H: f32 = 32.0;
+const TAB_H: f32 = 28.0;
+const PAGE_COLUMN: f32 = 640.0;
+
 #[derive(Default)]
 pub struct Settings {
     pub navigation_open: bool,
@@ -152,14 +158,26 @@ impl Page {
             Self::Hex => &icons::MIC,
             Self::Helpers => &icons::BRAIN,
             Self::ConnectedApps => &icons::CONNECTED,
-            Self::Appearance => &icons::PALETTE,
+            Self::Appearance => &APPEARANCE_ICON,
             Self::Sync => &icons::DEVICE,
             Self::Privacy => &icons::SHIELD_CHECK,
-            Self::Updates => &icons::REFRESH_CW,
+            Self::Updates => &icons::UPDATES,
             Self::Diagnostics => &icons::SLIDERS,
         }
     }
 }
+
+static APPEARANCE_ICON: std::sync::LazyLock<rune::Icon> = std::sync::LazyLock::new(|| {
+    static BODY: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+        r#"<g fill="none" stroke="currentColor" stroke-width="WIDTH" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v2m8 8h2m-3-7-1.256 1.256"/><path d="M14.837 16.385a6 6 0 1 1-7.223-7.222c.624-.147.97.66.715 1.248a4 4 0 0 0 5.26 5.259c.589-.255 1.396.09 1.248.715M16 12a4 4 0 0 0-4-4"/></g>"#
+            .replace("WIDTH", &icons::STROKE_WIDTH.to_string())
+    });
+    rune::Icon {
+        name: "lucide-sun-moon",
+        view: 24.0,
+        body: BODY.as_str(),
+    }
+});
 
 fn current(section: Section) -> (Page, usize) {
     match section {
@@ -490,19 +508,25 @@ pub(crate) fn setting_row(
         .child(control)
 }
 pub(crate) fn card(title: &str, body: El, p: Palette) -> El {
+    titled_card(title, body, p, roles::GROUP, 18.0)
+}
+fn settings_card(title: &str, body: El, p: Palette) -> El {
+    titled_card(title, body, p, roles::SMALL.bold(), roles::SECTION_TOP)
+}
+fn titled_card(title: &str, body: El, p: Palette, role: roles::Role, top: f32) -> El {
     col()
         .w_full()
         .min_w(0.0)
         .gap(8.0)
-        .mt(18.0)
+        .mt(top)
         .child(if title.starts_with("Hex") {
             row()
                 .items_center()
                 .gap(6.0)
                 .child(icons::draw(&icons::HEX_MARK, 14.0, p.soft))
-                .child(roles::GROUP.wrap(title, p.soft))
+                .child(role.wrap(title, p.soft))
         } else {
-            roles::GROUP.wrap(title, p.soft)
+            role.wrap(title, p.soft)
         })
         .child(panel(p).child(body.w_full()))
 }
@@ -1267,47 +1291,73 @@ fn jump(s: &mut State, dest: Destination) {
 }
 
 pub fn sidebar(s: &State, k: &Kit, p: Palette) -> El {
-    if s.app_w.get() < 540.0 && !s.hex.shell.navigation_open {
+    if s.app_w.get() < DRAWER_AT {
         return col().key("settings-sidebar").w(0.0).h_full();
     }
-    let compact = s.app_w.get() < 700.0;
-    let back_to = match s.hex.shell.back.as_ref().map(|dest| dest.page) {
-        Some(nav::Page::People) => "Back to People",
-        _ => "Back to meetings",
+    let width = if s.app_w.get() < 700.0 {
+        200.0
+    } else {
+        LIST_WIDE
     };
-    let width = if compact { 184.0 } else { 248.0 };
+    settings_list(s, k, p, width)
+}
+
+fn drawer_open(s: &State) -> bool {
+    s.app_w.get() < DRAWER_AT && (s.hex.shell.navigation_open || s.hex.filter.focused)
+}
+
+fn close_drawer(s: &mut State) {
+    s.hex.shell.navigation_open = false;
+    s.hex.filter.focused = false;
+}
+
+fn list_row(glyph: &'static rune::Icon, name: &str, active: bool, p: Palette) -> El {
+    let ink = if active { p.ink } else { p.soft };
+    pressable(
+        row()
+            .w_full()
+            .h(LIST_ROW_H)
+            .items_center()
+            .gap(10.0)
+            .px(8.0)
+            .child(icons::draw(glyph, icons::ROW, ink))
+            .child(roles::NAV.line(name, ink).grow(1.0).help(name)),
+    )
+    .radius(7.0)
+    .fill(if active { p.sel } else { p.side })
+    .hover(p.chip)
+    .focus_fill(p.chip)
+    .focus_ring(1.0, 0.0, p.line)
+}
+
+fn settings_list(s: &State, k: &Kit, p: Palette, width: f32) -> El {
     let mut list = col()
         .w_full()
-        .gap(3.0)
-        .padding(16.0)
+        .gap(1.0)
+        .px(8.0)
+        .pt(12.0)
+        .pb(8.0)
         .child(
-            rune::text("Sidenote")
-                .font(crate::ui::theme::display(26.0))
-                .color(p.ink)
-                .mt(4.0)
-                .mb(10.0),
-        )
-        .child(
-            pressable(
-                row()
-                    .items_center()
-                    .gap(8.0)
-                    .py(8.0)
-                    .child(icons::draw(&icons::CHEVRON_LEFT, 18.0, p.soft))
-                    .child(roles::CONTROL.line(back_to, p.soft)),
-            )
-            .key("settings-back")
-            .label("Back (Esc)")
-            .on_press(back),
+            list_row(&icons::CHEVRON_LEFT, "Back", false, p)
+                .key("settings-back")
+                .label("Back (Esc)")
+                .on_press(back),
         )
         .child(
             TextInput::new(&s.hex.filter)
                 .leading_icon(&icons::SEARCH)
-                .leading_icon_size(16.0)
-                .trailing(super::super::widgets::keycap("/", p))
+                .leading_icon_size(icons::ROW)
+                .trailing(
+                    roles::META
+                        .line("/", p.faint)
+                        .px(6.0)
+                        .radius(5.0)
+                        .border(1.0, p.line),
+                )
                 .placeholder("Search settings")
                 .label("Search settings")
-                .height(34.0)
+                .height(30.0)
+                .plain()
                 .on_edit(|s: &mut State| &mut s.hex.filter)
                 .on_submit(|s: &mut State, _| {
                     if let Some(dest) = results(s).into_iter().next() {
@@ -1317,7 +1367,11 @@ pub fn sidebar(s: &State, k: &Kit, p: Palette) -> El {
                 .build(k)
                 .key("hex-filter")
                 .w_full()
-                .mb(10.0),
+                .radius(8.0)
+                .fill(p.chip)
+                .outline(if s.hex.filter.focused { 1.0 } else { 0.0 }, -1.0, p.faint)
+                .mt(4.0)
+                .mb(8.0),
         );
     if !s.hex.filter.text.trim().is_empty() {
         let matches = results(s);
@@ -1344,6 +1398,7 @@ pub fn sidebar(s: &State, k: &Kit, p: Palette) -> El {
                 .key(format!("find-setting-{}", dest.key))
                 .radius(6.0)
                 .hover(p.chip)
+                .focus_ring(1.0, 0.0, p.line)
                 .on_press(move |s: &mut State| jump(s, dest.clone())),
             );
         }
@@ -1351,49 +1406,21 @@ pub fn sidebar(s: &State, k: &Kit, p: Palette) -> El {
         let (active, _) = active(s);
         for page in Page::ALL {
             if matches!(page, Page::General | Page::Hex | Page::Privacy) {
-                list = list.child(
-                    roles::GROUP
-                        .line(
-                            match page {
-                                Page::General => "You and meetings",
-                                Page::Hex => "This PC",
-                                _ => "Data and maintenance",
-                            },
-                            p.faint,
-                        )
-                        .mt(16.0)
-                        .mb(5.0),
-                );
+                list = list.child(row().h(28.0).px(8.0).items_center().mt(12.0).child(
+                    roles::META.line(
+                        match page {
+                            Page::General => "You and meetings",
+                            Page::Hex => "This PC",
+                            _ => "Data and maintenance",
+                        },
+                        p.faint,
+                    ),
+                ));
             }
-            list = list.child(
-                pressable(
-                    row()
-                        .w_full()
-                        .min_h(38.0)
-                        .items_center()
-                        .gap(10.0)
-                        .px(8.0)
-                        .py(7.0)
-                        .child(icons::draw(page.icon(), 18.0, p.soft))
-                        .child(if active == page {
-                            roles::NAV
-                                .bold()
-                                .line(page.name(), p.ink)
-                                .grow(1.0)
-                                .help(page.name())
-                        } else {
-                            roles::NAV
-                                .line(page.name(), p.soft)
-                                .grow(1.0)
-                                .help(page.name())
-                        }),
-                )
+            let button = list_row(page.icon(), page.name(), active == page, p)
                 .key(format!("settings-page-{}", page.name()))
                 .label(page.name())
                 .help(page.name())
-                .radius(8.0)
-                .fill(if active == page { p.sel } else { p.side })
-                .hover(p.chip)
                 .on_press(move |s: &mut State| {
                     let tab = s
                         .hex
@@ -1408,8 +1435,8 @@ pub fn sidebar(s: &State, k: &Kit, p: Palette) -> El {
                         .copied()
                         .unwrap_or(0);
                     navigate(s, page, tab);
-                }),
-            );
+                });
+            list = list.child(button);
         }
     }
     col()
@@ -1443,6 +1470,7 @@ pub(in crate::ui) fn tab_bar(
     } else {
         page.tabs()
     };
+    let people = page == Page::People;
     let mut tabs = row()
         .key(if jumps {
             "settings-jump-tabs"
@@ -1452,32 +1480,46 @@ pub(in crate::ui) fn tab_bar(
         .role("tablist")
         .label(format!("{} sections", page.name()))
         .w_full()
-        .gap(20.0)
+        .gap(if people { 20.0 } else { 4.0 })
+        .mt(if people { 0.0 } else { 16.0 })
         .flex_wrap()
         .focus_group();
     for (tab, name) in names.iter().enumerate() {
+        let selected = tab == active;
+        let ink = if selected { p.ink } else { p.soft };
         tabs = tabs.child(
-            pressable(
+            pressable(if people {
                 col()
                     .gap(12.0)
                     .pt(14.0)
-                    .child(if tab == active {
-                        roles::CONTROL.bold().wrap(*name, p.ink)
+                    .child(if selected {
+                        roles::CONTROL.bold().wrap(*name, ink)
                     } else {
-                        roles::CONTROL.wrap(*name, p.soft)
+                        roles::CONTROL.wrap(*name, ink)
                     })
-                    .child(rune::el().w_full().h(2.0).fill(if tab == active {
-                        p.ink
-                    } else {
-                        p.bg
-                    })),
-            )
+                    .child(
+                        rune::el()
+                            .w_full()
+                            .h(2.0)
+                            .fill(if selected { p.ink } else { p.bg }),
+                    )
+            } else {
+                row()
+                    .h(TAB_H)
+                    .px(10.0)
+                    .items_center()
+                    .radius(7.0)
+                    .fill(if selected { p.sel } else { Color::TRANSPARENT })
+                    .hover(p.chip)
+                    .focus_ring(1.0, 0.0, p.line)
+                    .child(roles::CONTROL.line(*name, ink))
+            })
             .key(format!(
                 "settings-{}-{tab}",
                 if jumps { "jump" } else { "tab" }
             ))
             .role("tab")
-            .focus_selected(tab == active)
+            .focus_selected(selected)
             .label(*name)
             .on_press(move |s: &mut State| {
                 if jumps {
@@ -1614,7 +1656,7 @@ fn labs(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
             s.hex.select_open = None;
         })
         .build(k, layer);
-    card("Labs", col().w_full()
+    settings_card("Labs", col().w_full()
         .child(setting_row(s, "labs-language-detection", "Language detection (experimental)",
             "Enable the standalone prepared-audio language stage. Writes advisory guesses only; transcription stays unchanged. Confidence thresholds are uncalibrated.",
             Switch::new(s.config.labs.language_detection)
@@ -1896,7 +1938,7 @@ fn vocabulary(s: &State, k: &Kit, p: Palette) -> El {
     out
 }
 fn sync_page(s: &State, k: &Kit, p: Palette) -> El {
-    let devices = col().w_full().child(card(
+    let devices = col().w_full().child(settings_card(
         "Devices",
         devices(s, k, p).child(hairline(p)).child(feature(
             s,
@@ -1915,7 +1957,7 @@ fn sync_page(s: &State, k: &Kit, p: Palette) -> El {
     if s.hex.shell.relay.enabled {
         col()
             .w_full()
-            .child(card("Labs", relay_labs(s, k, p), p).key("relay-labs-card"))
+            .child(settings_card("Labs", relay_labs(s, k, p), p).key("relay-labs-card"))
             .child(super::super::relay::section(s, k, p))
             .child(devices)
     } else {
@@ -1923,7 +1965,7 @@ fn sync_page(s: &State, k: &Kit, p: Palette) -> El {
             .w_full()
             .child(devices)
             .child(super::super::relay::peers_card(s, p))
-            .child(card("Labs", relay_labs(s, k, p), p).key("relay-labs-card"))
+            .child(settings_card("Labs", relay_labs(s, k, p), p).key("relay-labs-card"))
     }
 }
 fn jump_groups(page: Page, _tab: usize) -> &'static [&'static str] {
@@ -2028,7 +2070,9 @@ fn labs_group(s: &State, p: Palette) -> El {
             }
             rows = rows.child(lab_row(s, snapshot, id, p));
         }
-        out = out.child(card(group.name(), rows, p).key(format!("hex-labs-group-{}", group.key())));
+        out = out.child(
+            settings_card(group.name(), rows, p).key(format!("hex-labs-group-{}", group.key())),
+        );
     }
     if relevant
         .iter()
@@ -2164,7 +2208,7 @@ fn hex_summaries(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
                 .child(super::setting_row(s, k, st, place(st), p, layer))
                 .child(hairline(p));
         }
-        out = out.child(card("Hex · Separate summary engine", rows, p));
+        out = out.child(settings_card("Hex · Separate summary engine", rows, p));
     }
     out
 }
@@ -2336,7 +2380,7 @@ fn knowledge_base(s: &State, k: &Kit, p: Palette) -> El {
             .button_disabled(!kb.is_empty() && kb.validate().is_err())
             .on_press(save_kb),
     );
-    card("Knowledge base", body, p).key("knowledge-base")
+    settings_card("Knowledge base", body, p).key("knowledge-base")
 }
 
 fn meeting_icon_capture(s: &State, k: &Kit, p: Palette) -> El {
@@ -2406,7 +2450,7 @@ fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, page: Page, tab: us
             .w_full()
             .child(hex_group(
                 0,
-                card(
+                settings_card(
                     "Hex · Meeting recording",
                     hex_rows(s, k, p, layer, page, tab, false),
                     p,
@@ -2415,7 +2459,7 @@ fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, page: Page, tab: us
             .children(s.hex.setting("meetings.providers").map(|st| {
                 hex_group(
                     1,
-                    card(
+                    settings_card(
                         "Hex · Call apps",
                         readable::providers(s, k, st, p, layer),
                         p,
@@ -2424,7 +2468,7 @@ fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, page: Page, tab: us
             }))
             .child(hex_group(
                 2,
-                card(
+                settings_card(
                     "Sidenote · Languages you speak",
                     super::super::models::language_picker(s, k, p),
                     p,
@@ -2432,13 +2476,13 @@ fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, page: Page, tab: us
             ))
             .child(hex_group(
                 3,
-                card("Hex · Names and terms", vocabulary(s, k, p), p),
+                settings_card("Hex · Names and terms", vocabulary(s, k, p), p),
             ))
             .child(hex_group(
                 4,
                 advanced(
                     s,
-                    card(
+                    settings_card(
                         "Hex · Recording compatibility",
                         hex_rows(s, k, p, layer, page, tab, true),
                         p,
@@ -2449,7 +2493,7 @@ fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, page: Page, tab: us
         (Page::Meetings, 1) => col()
             .w_full()
             .child(ai_notes::section(s, k, p, ai_notes::Part::Summaries))
-            .child(card(
+            .child(settings_card(
                 "Memory",
                 feature(
                     s,
@@ -2475,7 +2519,7 @@ fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, page: Page, tab: us
         }
         (Page::Meetings, _) => col()
             .w_full()
-            .child(card(
+            .child(settings_card(
                 "Daily check",
                 feature(
                     s,
@@ -2495,7 +2539,7 @@ fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, page: Page, tab: us
             .children(ai_notes::setup_card(s, p))
             .child(super::super::ask_settings::section(s, k, p, layer))
             .child(super::super::cloud_ask::section(s, k, p, layer))
-            .child(roles::GROUP.wrap("Meeting summary agent", p.soft).mt(22.0))
+            .child(roles::SMALL.bold().wrap("Meeting summary agent", p.soft).mt(roles::SECTION_TOP))
             .child(ai_notes::section(s, k, p, ai_notes::Part::Helpers))
             .child(ai_notes::summary_model(s, k, p, layer, Vec::new()))
             .child(super::super::annotations::agents_section(s, k, p, layer)),
@@ -2515,7 +2559,7 @@ fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, page: Page, tab: us
                 s,
                 col()
                     .w_full()
-                    .child(card(
+                    .child(settings_card(
                         "Language handling",
                         meeting_languages::section(s, k, p, layer),
                         p,
@@ -2528,19 +2572,19 @@ fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, page: Page, tab: us
                 .w_full()
                 .child(hex_group(
                     0,
-                    card("Recording engine", summary_line(s, p), p),
+                    settings_card("Recording engine", summary_line(s, p), p),
                 ))
                 .child(hex_group(
                     1,
-                    card("Shortcuts", hex_group_rows(s, k, p, layer, 1), p),
+                    settings_card("Shortcuts", hex_group_rows(s, k, p, layer, 1), p),
                 ))
                 .child(hex_group(
                     2,
-                    card("Dictation", hex_group_rows(s, k, p, layer, 2), p),
+                    settings_card("Dictation", hex_group_rows(s, k, p, layer, 2), p),
                 ))
                 .child(hex_group(
                     3,
-                    card(
+                    settings_card(
                         "Speech model",
                         model_section(s, p).padding(14.0).key("legacy-hex-models"),
                         p,
@@ -2594,7 +2638,7 @@ fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, page: Page, tab: us
             .child(privacy(s, k, p))
             .child(roles::SMALL.wrap("Connected apps can read meetings, typed notes, tasks and memory, and send them to their AI provider.", p.soft))
             .child(tasks::button("Manage connected apps", "privacy-connected-apps", false, p).on_press(|s: &mut State| navigate(s, Page::ConnectedApps, 0)))
-            .child(card(
+            .child(settings_card(
                 "Hex · Retention and files",
                 hex_rows(s, k, p, layer, page, 0, false),
                 p,
@@ -2606,14 +2650,14 @@ fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, page: Page, tab: us
             .child(crate::ui::response_times::section(p))
             .child(labs(s, k, p, layer))
             .child(ai_notes::section(s, k, p, ai_notes::Part::Advanced))
-            .child(card(
+            .child(settings_card(
                 "Update source",
                 super::super::updates::source(s, p)
                     .key("update-source")
                     .padding(14.0),
                 p,
             ))
-            .child(card(
+            .child(settings_card(
                 "Hex · Diagnostics",
                 hex_rows(s, k, p, layer, page, 0, false),
                 p,
@@ -2640,7 +2684,7 @@ fn named_folder(s: &State, k: &Kit, p: Palette) -> El {
         }),
     );
     if open {
-        out = out.child(card(
+        out = out.child(settings_card(
             "Sync folder",
             roles::SMALL
                 .wrap(s.store.root.display().to_string(), p.ink)
@@ -2649,18 +2693,22 @@ fn named_folder(s: &State, k: &Kit, p: Palette) -> El {
             p,
         ));
         if s.hex.shell.relay.enabled {
-            out = out.child(card("Relay address", relay_address(s, k, p), p));
+            out = out.child(settings_card("Relay address", relay_address(s, k, p), p));
         }
     }
     out
 }
-pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -> El {
+pub fn pane(s: &State, k: &Kit, p: Palette, _narrow: bool, layer: &mut Vec<El>) -> El {
     let (page, tab) = active(s);
+    let narrow = s.app_w.get() < DRAWER_AT;
+    let gutter = if narrow { 16.0 } else { 40.0 };
+    let pane_width = PAGE_COLUMN + 2.0 * gutter;
+    let drawer = drawer_open(s);
     let mut doc = col()
         .key("hex-top")
         .w_full()
-        .max_w(940.0)
-        .px(if narrow { 16.0 } else { 40.0 })
+        .max_w(pane_width)
+        .px(gutter)
         .pb(40.0);
     let setup = (page == Page::Hex)
         .then(|| super::setup::card(s, p))
@@ -2702,6 +2750,18 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
     // The section controls above always need their sections, so the body shows in every state.
     // Its controls stay disabled and the notes above say why while Hex is not confirmed.
     doc = doc.child(body(s, k, p, layer, page, tab));
+    if drawer {
+        layer.push(rune_kit::scrim("settings-scrim", close_drawer).fill(p.scrim));
+        layer.push(
+            settings_list(s, k, p, LIST_WIDE)
+                .key("settings-drawer")
+                .role("dialog")
+                .label("Settings pages")
+                .pin(Some(0.0), Some(0.0), None, Some(0.0))
+                .focus_return("settings-navigation")
+                .modal(true, close_drawer),
+        );
+    }
     col()
         .key("hex-pane")
         .w_full()
@@ -2718,21 +2778,22 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
             col().w_full().items_center().child(
                 col()
                     .w_full()
-                    .max_w(940.0)
-                    .px(if narrow { 16.0 } else { 40.0 })
-                    .children((s.app_w.get() < 540.0).then(|| {
-                        crate::ui::widgets::icon_button(
+                    .max_w(pane_width)
+                    .px(gutter)
+                    .children(narrow.then(|| {
+                        pressable(row().size(TAB_H, TAB_H).center().child(icons::draw(
                             &icons::PANEL_OPEN,
-                            "Settings pages",
-                            "settings-navigation",
-                            crate::ui::widgets::ButtonRole::Ghost,
-                            p,
-                        )
-                        .expanded(s.hex.shell.navigation_open)
-                        .mt(10.0)
-                        .on_press(|s: &mut State| {
-                            s.hex.shell.navigation_open = !s.hex.shell.navigation_open
-                        })
+                            icons::ROW,
+                            p.soft,
+                        )))
+                        .key("settings-navigation")
+                        .label("Settings pages")
+                        .radius(7.0)
+                        .hover(p.chip)
+                        .focus_ring(1.0, 0.0, p.line)
+                        .expanded(drawer)
+                        .mt(12.0)
+                        .on_press(|s: &mut State| s.hex.shell.navigation_open = true)
                     }))
                     .children(
                         s.hex
@@ -2742,15 +2803,19 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
                     )
                     .child(
                         rune::text(page.name())
-                            .font(crate::ui::theme::display(32.0))
+                            .font(if narrow {
+                                crate::ui::theme::display(24.0)
+                            } else {
+                                crate::ui::theme::display(crate::ui::theme::PAGE_TITLE).lh(32.0)
+                            })
                             .color(p.ink)
                             .wrap()
                             .key("settings-title")
-                            .mt(22.0),
+                            .mt(roles::SECTION_TOP),
                     )
                     .children(
                         (page != Page::Prompts)
-                            .then(|| roles::META.wrap("Applies to this PC", p.faint).mt(6.0)),
+                            .then(|| roles::META.wrap("Applies to this PC", p.faint).mt(4.0)),
                     )
                     .children(
                         matches!(
@@ -2793,8 +2858,8 @@ pub fn on_key(s: &mut State, e: &KeyEvent, tx: &mut Tx) -> bool {
         tx.blur();
         return true;
     }
-    if e.key == Key::Escape && s.hex.shell.navigation_open {
-        s.hex.shell.navigation_open = false;
+    if e.key == Key::Escape && drawer_open(s) {
+        close_drawer(s);
         tx.blur();
         return true;
     }
@@ -3034,6 +3099,42 @@ pub fn scene(s: &mut State, name: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settings_list_rows_and_tabs_use_the_compact_heights() {
+        crate::test_paths::isolate();
+        let mut state = State::new();
+        state.open_hex();
+        navigate(&mut state, Page::Meetings, 0);
+        let mut rt = rune::Runtime::with_text(
+            state,
+            crate::ui::view,
+            (1280.0, 900.0),
+            rune::Env::default(),
+            rune::text::TextSystem::new(
+                crate::ui::theme::fonts(),
+                (crate::ui::theme::SANS, "Inter"),
+            ),
+        );
+        rt.settle_all();
+        rt.frame(0.0);
+        let elements = rt.elements();
+        let rect = |key| {
+            elements
+                .iter()
+                .find(|element| element.key.as_deref() == Some(key))
+                .unwrap_or_else(|| panic!("missing {key}"))
+                .rect
+        };
+        for (key, height) in [
+            ("settings-back", 32.0),
+            ("settings-page-Meetings", 32.0),
+            ("settings-tab-0", 28.0),
+        ] {
+            assert_eq!(rect(key)[3], height, "{key}");
+        }
+        assert_eq!(rect("hex-filter")[2], rect("settings-sidebar")[2] - 16.0);
+    }
 
     #[test]
     fn people_is_a_sidebar_page_and_search_and_back_return_to_it() {
