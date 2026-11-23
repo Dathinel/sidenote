@@ -7,7 +7,8 @@ param(
     [Parameter(Mandatory = $true)] [string]$DotnetRoot,
     [Parameter(Mandatory = $true)] [string]$GnuBin,
     [Parameter(Mandatory = $true)] [string]$ReleaseNotes,
-    [Parameter(Mandatory = $true)] [string]$Log
+    [Parameter(Mandatory = $true)] [string]$Log,
+    [ValidateSet('stable', 'nightly')] [string]$Channel
 )
 $ErrorActionPreference = 'Stop'
 try {
@@ -43,7 +44,9 @@ try {
     $parent = Split-Path -Parent $Log
     if (-not (Test-Path -LiteralPath $parent -PathType Container)) { throw 'The log directory does not exist.' }
     $ErrorActionPreference = 'Continue'
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'pack_release.ps1') -Feed $Feed -DotnetRoot $DotnetRoot -GnuBin $GnuBin -ReleaseNotes $ReleaseNotes 2>&1 | Out-File -LiteralPath $Log -Encoding utf8
+    $packArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $PSScriptRoot 'pack_release.ps1'), '-Feed', $Feed, '-DotnetRoot', $DotnetRoot, '-GnuBin', $GnuBin, '-ReleaseNotes', $ReleaseNotes)
+    if ($Channel) { $packArgs += @('-Channel', $Channel) }
+    & powershell.exe @packArgs 2>&1 | Out-File -LiteralPath $Log -Encoding utf8
     $packExit = $LASTEXITCODE
     $ErrorActionPreference = 'Stop'
     if ($packExit -ne 0) { throw "Pack failed; see $Log." }
