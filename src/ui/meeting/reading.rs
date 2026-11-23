@@ -1,12 +1,19 @@
 //! Reading keeps the narrative, actions and transcript in their own scroll areas.
 use super::*;
 use crate::ui::{
-    icons, notes_status, tasks,
+    icons, notes_status, rows, tasks,
     widgets::{self, HelpHint},
 };
 use rune::{Color, KeyEvent};
 use rune_kit::{Placement, Popover};
-use sidenote::core::{self, people::Side};
+use sidenote::core::{self, TaskItem, TaskStatus, Urgency, people::Side};
+use std::{collections::BTreeSet, rc::Rc};
+
+#[derive(Default)]
+pub(crate) struct RailVisit {
+    done_open: bool,
+    kept: BTreeSet<usize>,
+}
 
 pub fn return_key(origin: &str) -> String {
     if origin.starts_with("pt-") {
@@ -678,30 +685,85 @@ fn rail_side(name: &str, count: usize, p: Palette) -> El {
         .child(roles::META.wrap(count.to_string(), p.faint))
 }
 
-/// A task or question row: 8 all round, the 16 px mark at the left, the text beside it.
-fn rail_row(mark: El, body: El) -> El {
-    row()
-        .w_full()
-        .items_start()
-        .gap(10.0)
-        .padding(8.0)
-        .radius(8.0)
-        .child(mark.mt(1.0))
-        .child(body.grow(1.0).min_w(0.0))
+fn open_rail_task(s: &mut State, id: &str, index: usize) {
+    s.go_home();
+    s.view = tasks::View::Tasks;
+    s.open_task(id, index);
 }
 
-/// The line between two rail rows, inset like the row padding.
-fn rail_rule(p: Palette) -> El {
-    col().w_full().px(8.0).child(hairline(p))
+fn rail_task(s: &State, t: &TaskItem, width: f32, p: Palette) -> El {
+    let waiting = t
+        .waiting_label
+        .as_deref()
+        .map_or_else(|| "Waiting".into(), |who| format!("Waiting on {who}"));
+    let status = match (t.done, t.status) {
+        (true, _) => rows::Status::Done,
+        (_, TaskStatus::Todo) => rows::Status::Open,
+        (_, TaskStatus::Waiting) => rows::Status::Waiting(&waiting),
+        (_, TaskStatus::Review) => rows::Status::Review,
+    };
+    let due = core::due_phrase(t, s.tasks.today);
+    let date = t.due.as_deref().map(core::nice_date).unwrap_or_default();
+    let due = due.as_ref().map(|(phrase, urgency)| {
+        let label = match urgency {
+            Urgency::Today => "Today",
+            Urgency::Late => phrase,
+            _ => &date,
+        };
+        (label, *urgency, t.due_default)
+    });
+    let index = t.index;
+    let id = t.meeting_id.clone();
+    let text = t.task.clone();
+    let keep = !t.done;
+    let toggle = Rc::new(move |s: &mut State| {
+        if keep {
+            s.meeting_ui.rail.kept.insert(index);
+        }
+        s.toggle_task_at(&id, &text);
+    });
+    let task = rows::Task {
+        row: rows::Row {
+            title: tasks::shown_title(s, t),
+            interactive: true,
+            ..rows::Row::default()
+        },
+        description: None,
+        project: None,
+        owner: if t.mine == Some(true) {
+            Some("You")
+        } else {
+            t.owner.as_deref()
+        },
+        due,
+        status,
+        toggle: Some(toggle),
+    };
+    let id = t.meeting_id.clone();
+    rows::task_row(task, rows::Density::Rail, width, false, p)
+        .key(format!("meeting-task-{index}"))
+        .on_press(move |s: &mut State| open_rail_task(s, &id, index))
+}
+
+fn rail_list(s: &State, mut list: El, tasks: &[&TaskItem], width: f32, p: Palette) -> El {
+    for (i, t) in tasks.iter().enumerate() {
+        if i > 0 {
+            list = list.child(rows::Density::Rail.separator(width, p));
+        }
+        list = list.child(rail_task(s, t, width, p));
+    }
+    list
 }
 
 fn rail(s: &State, k: &Kit, m: &Meeting, p: Palette, layer: &mut Vec<El>) -> El {
-    let items: Vec<_> = s
+    let width = s.app_w.get();
+    let visit = &s.meeting_ui.rail;
+    let (folded, items): (Vec<_>, Vec<_>) = s
         .tasks
         .all
         .iter()
         .filter(|t| t.meeting_id == m.id && !t.manual)
-        .collect();
+        .partition(|t| t.done && !visit.kept.contains(&t.index));
     let mut rail = col().key("meeting-actions");
     let mut top = 0.0;
     let mut task_notice = notes_status::tasks_notice(s, m, p).map(|n| n.px(8.0).mb(4.0));
@@ -710,6 +772,7 @@ fn rail(s: &State, k: &Kit, m: &Meeting, p: Palette, layer: &mut Vec<El>) -> El 
         .map(|(external, name)| {
             let group: Vec<_> = items
                 .iter()
+                .copied()
                 .filter(|t| {
                     let side = t.owner.as_ref().and_then(|owner| {
                         s.people
@@ -727,95 +790,50 @@ fn rail(s: &State, k: &Kit, m: &Meeting, p: Palette, layer: &mut Vec<El>) -> El 
     // "Tasks 4". "Ours" only means something next to "They will", so the two sides get their
     // own small labels only when a They-will group exists.
     let sides = groups.iter().any(|(external, ..)| *external);
-    if !groups.is_empty() {
-        let total: usize = groups.iter().map(|(.., group)| group.len()).sum();
+    if !items.is_empty() || !folded.is_empty() {
+        let total = items.iter().filter(|t| !t.done).count();
         let hint = HelpHint::Tasks.build(k, p, layer);
         rail = rail
             .child(rail_label("Tasks".into(), Some(total), Some(hint), p).key("meeting-task-count"))
             .children(task_notice.take());
     }
-    let mut gap = 0.0;
+    let mut keys = Vec::new();
     for (external, name, group) in groups {
         if sides {
-            rail = rail.child(rail_side(name, group.len(), p).mt(gap).key(if external {
+            let count = group.iter().filter(|t| !t.done).count();
+            rail = rail.child(rail_side(name, count, p).mt(top).key(if external {
                 "meeting-external-task-count"
             } else {
                 "meeting-ours-task-count"
             }));
         }
-        gap = roles::SECTION_TOP;
-        let mut list = col().w_full().key(if external {
+        let list = col().w_full().key(if external {
             "meeting-external-tasks"
         } else {
             "meeting-tasks"
         });
-        for (i, t) in group.iter().enumerate() {
-            if i > 0 {
-                list = list.child(rail_rule(p));
-            }
-            let id = m.id.clone();
-            let index = t.index;
-            let text = t.task.clone();
-            let mut title = roles::NAME
-                .wrap(
-                    tasks::shown_title(s, t),
-                    if t.done { p.faint } else { p.ink },
-                )
-                .max_lines(2);
-            if t.done {
-                title = title.strike(0, tasks::shown_title(s, t).len(), None);
-            }
-            let due = t
-                .due
-                .as_deref()
-                .map(core::nice_date)
-                .unwrap_or_else(|| "No date".into());
-            let owner = t.owner.as_deref().unwrap_or("No owner");
-            let tick = pressable(icons::draw(
-                if t.done { &icons::DONE } else { &icons::CIRCLE },
-                16.0,
-                if t.done { p.ok } else { p.soft },
-            ))
-            .key(format!("meeting-tick-{index}"))
-            .role("checkbox")
-            .checked(t.done)
-            .label(format!(
-                "Mark {} {}",
-                t.title,
-                if t.done { "open" } else { "done" }
-            ))
-            .on_press(move |s: &mut State| s.toggle_task_at(&id, &text));
-            let task_id = m.id.clone();
-            list = list.child(
-                rail_row(
-                    tick,
-                    col()
-                        .gap(1.0)
-                        .child(
-                            pressable(title)
-                                .key(format!("meeting-task-open-{index}"))
-                                .on_press(move |s: &mut State| {
-                                    s.go_home();
-                                    s.view = tasks::View::Tasks;
-                                    s.open_task(&task_id, index);
-                                }),
-                        )
-                        .children(
-                            (!t.description.is_empty())
-                                .then(|| roles::SMALL.line(&t.description, p.soft)),
-                        )
-                        .child(roles::META.wrap(
-                            format!(
-                                "{owner} \u{b7} {due}{}",
-                                if t.due_default { " \u{b7} guessed" } else { "" }
-                            ),
-                            p.faint,
-                        )),
-                )
-                .key(format!("meeting-task-{index}")),
+        keys.extend(
+            group
+                .iter()
+                .map(|t| (format!("meeting-task-{}", t.index), Some(t.index))),
+        );
+        rail = rail.child(rail_list(s, list, &group, width, p));
+        top = roles::SECTION_TOP;
+    }
+    if !folded.is_empty() {
+        let toggle = Rc::new(|s: &mut State| s.meeting_ui.rail.done_open ^= true);
+        let key = "meeting-done";
+        keys.push((key.into(), None));
+        rail = rail.child(rows::done_line(folded.len(), visit.done_open, toggle, p).key(key));
+        if visit.done_open {
+            keys.extend(
+                folded
+                    .iter()
+                    .map(|t| (format!("meeting-task-{}", t.index), Some(t.index))),
             );
+            let list = col().w_full().key("meeting-done-tasks");
+            rail = rail.child(rail_list(s, list, &folded, width, p));
         }
-        rail = rail.child(list);
         top = roles::SECTION_TOP;
     }
     if let Some(notice) = task_notice {
@@ -837,25 +855,52 @@ fn rail(s: &State, k: &Kit, m: &Meeting, p: Palette, layer: &mut Vec<El>) -> El 
         let mut list = col().w_full().key("meeting-questions");
         for (i, q) in m.summary.to_settle.iter().enumerate() {
             if i > 0 {
-                list = list.child(rail_rule(p));
+                list = list.child(rows::Density::Rail.separator(width, p));
             }
-            list =
-                list.child(
-                    rail_row(
-                        icons::draw(&icons::HELP, 16.0, p.soft),
-                        col()
-                            .gap(1.0)
-                            .child(roles::SMALL.wrap(&q.question, p.ink))
-                            .children(q.waits_on.as_ref().map(|name| {
-                                roles::META.wrap(format!("Waiting on {name}"), p.faint)
-                            })),
-                    )
-                    .key(format!("meeting-question-{i}")),
-                );
+            let details = q.waits_on.as_ref().map(|name| format!("Waiting on {name}"));
+            let question = rows::Row {
+                title: &q.question,
+                ..rows::Row::default()
+            };
+            let item =
+                rows::question_row(question, details.as_deref().unwrap_or(""), false, width, p);
+            list = list.child(item.key(format!("meeting-question-{i}")));
         }
         rail = rail.child(list);
     }
-    rail.child(crate::ui::memory::settled::meeting_footer(s, m, p).mt(20.0))
+    let id = m.id.clone();
+    rail.on_key(move |s: &mut State, e, tx| {
+        if e.mods != rune::Mods::default() {
+            return false;
+        }
+        let Some(at) = keys
+            .iter()
+            .position(|(key, _)| Some(key.as_str()) == tx.focused())
+        else {
+            return false;
+        };
+        let step = match e.key {
+            Key::Up => -1,
+            Key::Down => 1,
+            Key::Enter => {
+                if !tx.key_repeat() {
+                    if let Some(index) = keys[at].1 {
+                        open_rail_task(s, &id, index);
+                    } else {
+                        s.meeting_ui.rail.done_open ^= true;
+                    }
+                }
+                return true;
+            }
+            _ => return false,
+        };
+        if let Some((key, _)) = at.checked_add_signed(step).and_then(|i| keys.get(i)) {
+            tx.focus(key, true);
+            tx.scroll_into_view(key);
+        }
+        true
+    })
+    .child(crate::ui::memory::settled::meeting_footer(s, m, p).mt(20.0))
 }
 
 pub fn transcript_height(s: &State) -> f32 {
@@ -882,7 +927,12 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
     let fade = (150.0 - s.overlay_h.get()).max(0.0);
     let mut doc = narrative(s, m, p);
     if !wide {
-        doc = doc.child(rail(s, k, m, p, layer).mx(-8.0).mt(roles::SECTION_TOP));
+        let inset = if s.app_w.get() < super::PHONE {
+            0.0
+        } else {
+            -8.0
+        };
+        doc = doc.child(rail(s, k, m, p, layer).mx(inset).mt(roles::SECTION_TOP));
     }
     let mut main = col()
         .key("meeting-main")

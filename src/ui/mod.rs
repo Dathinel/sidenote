@@ -801,6 +801,7 @@ impl State {
             return;
         }
         self.selected = Some(id.to_string());
+        self.meeting_ui.rail = meeting::reading::RailVisit::default();
         self.meeting_ui.status_open = false;
         self.transcript_open = false;
         self.transcript_filter = TextEdit::new("");
