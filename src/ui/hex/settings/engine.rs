@@ -75,6 +75,13 @@ impl Field {
         Self::TranslationPrompt,
     ];
     const COUNT: usize = 12;
+    fn visible(self, config: &Config) -> bool {
+        match self {
+            Self::Hindi | Self::Telugu => config.features.indic_engine,
+            Self::Translation | Self::TranslationPrompt => config.features.translation,
+            _ => true,
+        }
+    }
     fn index(self) -> usize {
         self as usize
     }
@@ -453,6 +460,9 @@ fn adopt(engine: &mut Engine, config: Config, fields: &[Field]) {
 }
 /// Reset to default asks twice, because it throws away the person's own text.
 fn reset(s: &mut State, field: Field) {
+    if !field.visible(&s.config) {
+        return;
+    }
     if s.hex.shell.engine.confirm_reset != Some(field) {
         s.hex.shell.engine.confirm_reset = Some(field);
         return;
@@ -477,6 +487,9 @@ fn save(s: &mut State, fields: &[Field]) {
     let drafts: Vec<_> = fields
         .iter()
         .filter_map(|field| {
+            if !field.visible(&s.config) {
+                return None;
+            }
             let draft = s.hex.shell.engine.drafts.get(field.index())?;
             Some((*field, draft.text.clone()))
         })
@@ -717,7 +730,11 @@ fn prompt_row(
 }
 fn prompts_card(s: &State, k: &Kit, p: Palette, statuses: &BTreeMap<String, FieldStatus>) -> El {
     let mut rows = col().w_full();
-    for (index, field) in Field::PROMPTS.iter().enumerate() {
+    for (index, field) in Field::PROMPTS
+        .iter()
+        .filter(|field| field.visible(&s.config))
+        .enumerate()
+    {
         if index > 0 {
             rows = rows.child(settings_divider(p));
         }
@@ -789,7 +806,11 @@ fn group(
     statuses: &BTreeMap<String, FieldStatus>,
 ) -> El {
     let mut rows = col().w_full();
-    for (index, field) in fields.iter().enumerate() {
+    for (index, field) in fields
+        .iter()
+        .filter(|field| field.visible(&s.config))
+        .enumerate()
+    {
         if index > 0 {
             rows = rows.child(settings_divider(p));
         }
@@ -957,6 +978,8 @@ pub(super) fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
 /// that comes from the language settings. Everything else stays at its default.
 pub(super) fn scene_config(config: &mut Config) {
     use sidenote::core::meeting_router::{LanguageRoutes, ProviderRoute};
+    config.features.indic_engine = true;
+    config.features.translation = true;
     let models = &mut config.engine_settings.models;
     models.insert("te".into(), "synthetic-te-model".into());
     config.engine_settings.stages.title_model = "synthetic-title-model".into();
@@ -1273,7 +1296,8 @@ mod tests {
     fn a_save_never_turns_an_untouched_stale_field_into_an_overwrite() {
         // Each kind of save in this tab is followed by a second, unrelated save.
         for kind in ["toggle", "step model", "prompt reset"] {
-            let (mut s, root) = state_with(EMPTY);
+            let (mut s, root) =
+                state_with(r#"{"version":1,"features":{"translation":true},"notes":{}}"#);
             let mut other = Config::load_in(root.path()).unwrap();
             other.engine_settings.worker_threads = 8;
             other.engine_settings.notes_prompt = Some("Synthetic other window".into());

@@ -458,6 +458,9 @@ impl State {
                 if projects_changed {
                     self.refresh_areas();
                 }
+                if !self.config.features.indic_engine {
+                    self.stop_language_pack_downloads();
+                }
                 self.request_refresh();
             }
             Err(error) => {

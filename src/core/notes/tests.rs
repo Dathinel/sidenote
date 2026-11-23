@@ -119,6 +119,8 @@ fn routing_setup() -> (Temp, PathBuf, NotesSettings) {
     let mut config = crate::core::Config::default();
     config.notes = Some(settings.clone());
     config.pipeline.profile = "experimental".into();
+    config.features.indic_engine = true;
+    config.features.translation = true;
     config.labs.after_stop_language_routing = true;
     config.engine_settings.stages.routing_deadline_seconds = 360;
     let manifest = folder.join("manifest.json");

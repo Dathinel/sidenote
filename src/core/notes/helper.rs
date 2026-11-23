@@ -212,6 +212,13 @@ impl Run for Cli {
                 "HELPER_CONSENT" => "translation_consent_changed",
                 _ => "helper_unsupported",
             })
+            .and_then(|reply| {
+                if authorize() {
+                    Ok(reply)
+                } else {
+                    Err("translation_consent_changed")
+                }
+            })
         };
         if claude.is_some() {
             return invoke(None, prompt);

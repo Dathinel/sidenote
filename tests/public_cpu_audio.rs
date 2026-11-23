@@ -20,7 +20,7 @@ fn default_cpu_passes_route_public_hindi_and_telugu() {
     fs::write(
         state.join("config.json"),
         json!({
-            "version": 1, "features": {}, "notes": NotesSettings::default(),
+            "version": 1, "features": {"indic_engine": true}, "notes": NotesSettings::default(),
             "pipeline": {
                 "model_state_dir": bundle,
                 "runtime_dll": bundle.join("onnxruntime.dll"),

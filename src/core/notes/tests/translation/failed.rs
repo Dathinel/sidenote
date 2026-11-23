@@ -40,6 +40,8 @@ fn recognizer_failure_uses_complete_hex_baseline() {
     config.notes = Some(settings.clone());
     config.pipeline.profile = "experimental".into();
     config.labs.after_stop_language_routing = true;
+    config.features.indic_engine = true;
+    config.features.translation = true;
     config.engine_settings.stages.translation_enabled_at_ms = Some(1);
     config.save(&root).unwrap();
     jobs::enqueue(ID).unwrap();

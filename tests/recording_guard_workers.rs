@@ -20,7 +20,7 @@ fn old_queued_short_jobs_are_skipped_by_both_worker_processes() {
     let folder = meetings.join(id);
     write(
         &state.join("config.json"),
-        json!({"version":1,"features":{},"pipeline":{"profile":"experimental"},"notes":{"engine":"app","helper":null}}),
+        json!({"version":1,"features":{"indic_engine":true},"pipeline":{"profile":"experimental"},"notes":{"engine":"app","helper":null}}),
     );
     write(
         &folder.join("manifest.json"),

@@ -742,7 +742,9 @@ fn start_worker(root: PathBuf) -> std::thread::JoinHandle<()> {
             if crate::updates::listener_stopping() {
                 return;
             }
-            if super::Config::load().is_ok_and(|c| c.labs.process_meeting_windows) {
+            if super::Config::load()
+                .is_ok_and(|c| c.features.indic_engine && c.labs.process_meeting_windows)
+            {
                 if crate::hex_engine::listener_status().is_ok_and(|s| s["can_process"] == true)
                     && drain(&root, post_audio).is_err()
                 {
@@ -917,7 +919,8 @@ fn transcribe_window(
 
 fn post_audio(model: &str, language: &str, audio: &[u8]) -> io::Result<Value> {
     if crate::updates::listener_stopping()
-        || !super::Config::load().is_ok_and(|c| c.labs.process_meeting_windows)
+        || !super::Config::load()
+            .is_ok_and(|c| c.features.indic_engine && c.labs.process_meeting_windows)
         || !crate::hex_engine::listener_status().is_ok_and(|s| s["can_process"] == true)
     {
         return Err(io::ErrorKind::WouldBlock.into());

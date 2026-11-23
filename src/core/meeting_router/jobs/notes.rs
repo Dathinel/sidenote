@@ -9,7 +9,10 @@ pub(super) fn enabled(root: &Path) -> io::Result<Option<Config>> {
     };
     let config: Config =
         serde_json::from_slice(bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes))?;
-    Ok((config.labs.after_stop_language_routing && config.pipeline.enabled()).then_some(config))
+    Ok((config.features.indic_engine
+        && config.labs.after_stop_language_routing
+        && config.pipeline.enabled())
+    .then_some(config))
 }
 #[cfg(test)]
 pub(crate) fn notes_input(
@@ -205,7 +208,9 @@ fn dev40_setup_required_keeps_the_capture_and_shows_the_count() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();
     let store = ModelStore::new(root.to_owned());
-    store_io::write(&root.join("config.json"), &Config::load_in(root).unwrap()).unwrap();
+    let mut config = Config::load_in(root).unwrap();
+    config.features.indic_engine = true;
+    config.save(root).unwrap();
     let capture =
         br#"{"source":"system","text":"Synthetic baseline survives.","start_ms":0,"end_ms":3000}"#;
     let partial = root.join("models/silero-vad/silero-vad.onnx.part");

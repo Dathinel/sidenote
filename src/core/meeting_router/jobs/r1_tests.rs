@@ -28,6 +28,7 @@ impl Harness {
             r.routes.retain(|k, _| k == "en");
         }
         fixture.config.labs.after_stop_language_routing = labs;
+        fixture.config.features.indic_engine = true;
         let root = core::state_dir();
         assert!(root.starts_with(crate::test_home()));
         fs::create_dir_all(&root).unwrap();

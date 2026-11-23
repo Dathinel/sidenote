@@ -24,7 +24,13 @@ pub(crate) fn run(mode: &str) -> io::Result<()> {
             "Use an extracted app and temporary proof folders",
         ));
     }
-    let mut runtime = settings_models_runtime(State::new());
+    let mut state = State::new();
+    if matches!(mode, "settings-download" | "settings-cancel")
+        && !state.config.features.indic_engine
+    {
+        state.toggle_feature(core::Feature::IndicEngine);
+    }
+    let mut runtime = settings_models_runtime(state);
     match mode {
         "startup" => {
             runtime.poll = Some(super::super::poll);
