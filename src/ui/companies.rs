@@ -106,6 +106,9 @@ impl State {
         self.companies.merging = false;
     }
     pub fn company_edit(&mut self, edit: Edit) {
+        if !self.config.features.people {
+            return;
+        }
         self.publish_edit(super::edit_worker::Job::Company {
             root: self.store.root.clone(),
             edit,

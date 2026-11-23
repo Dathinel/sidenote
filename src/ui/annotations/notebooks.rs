@@ -41,6 +41,9 @@ impl State {
             .find(|b| &b.id == id)
     }
     fn persist_book(&mut self, b: Notebook) -> bool {
+        if !self.config.features.annotations {
+            return false;
+        }
         if let Err(e) = notebook::save(&self.store.root, &b) {
             self.annotations.status = e.to_string();
             return false;
@@ -59,6 +62,9 @@ impl State {
         true
     }
     pub(super) fn open_notebook(&mut self, id: &str) {
+        if !self.config.features.annotations {
+            return;
+        }
         self.cancel_annotation_note();
         self.annotations.selected = None;
         self.annotations.review = None;

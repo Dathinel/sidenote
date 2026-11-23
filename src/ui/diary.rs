@@ -906,7 +906,7 @@ impl State {
 
 fn attention(s: &State) -> Vec<core::diary::Attention> {
     core::diary::aggregate(
-        if s.config.features.daily_check {
+        if s.config.features.enabled(core::Feature::DailyCheck) {
             &s.check.diary_reports
         } else {
             &[]

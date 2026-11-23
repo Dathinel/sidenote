@@ -284,8 +284,33 @@ fn text_page(text: &str, offset: Option<usize>, limit: Option<usize>) -> Result<
     )
 }
 
+fn require_tool_enabled(root: &std::path::Path, name: &str) -> Result<(), String> {
+    if let Some(feature) = Feature::for_tool(name) {
+        let config =
+            Config::load_in(root).map_err(|e| format!("Could not read feature settings: {e}"))?;
+        if name == "list_teams" && !config.features.people {
+            return Err("People is off. Turn it on in Settings > Experimental features.".into());
+        }
+        if !config.features.enabled(feature) {
+            let settings = match feature {
+                Feature::Tasks => "Settings > General",
+                Feature::DailyCheck => {
+                    "Settings > Experimental features and Meetings > Daily check"
+                }
+                _ => "Settings > Experimental features",
+            };
+            return Err(format!(
+                "{} is off. Turn it on in {settings}.",
+                feature.name()
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Executes an operation against a fresh merged view; the return value is independent of MCP.
 pub fn call(name: &str, arguments: Value) -> Result<Value, String> {
+    require_tool_enabled(&state_dir(), name)?;
     let _update_activity = if name == "propose_memory" {
         Some(
             crate::updates::activity()
@@ -294,15 +319,6 @@ pub fn call(name: &str, arguments: Value) -> Result<Value, String> {
     } else {
         None
     };
-    if let Some(feature) = Feature::for_tool(name) {
-        let config = Config::load().map_err(|e| format!("Could not read feature settings: {e}"))?;
-        if !config.features.enabled(feature) {
-            return Err(format!(
-                "{} is off. Turn it on in Settings > Features.",
-                feature.name()
-            ));
-        }
-    }
     let tag = scope(name, &arguments);
     let mut warnings = Vec::new();
     let data = match name {
@@ -660,6 +676,7 @@ pub fn meeting_resource(uri: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::store_io;
     fn catalog() -> Catalog {
         let summary = serde_json::from_value(json!({"title":"Launch", "todo":[
             {"id":"first","title":"Send release","description":"Include changelog","owner":"A C","status":"waiting","waiting_on":{"task_id":"blocker"},"subtasks":[{"id":"child","title":"Read proof"}]},
@@ -819,5 +836,58 @@ mod tests {
         let next = page(rows, Some(1), first["nextCursor"].as_str(), "teams").unwrap();
         assert_eq!(next["items"][0]["name"], "Ops");
         assert_eq!(next["hasMore"], false);
+    }
+    #[test]
+    fn experimental_tools_recheck_saved_switches() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        store_io::write(&root.join("config.json"), &json!({
+            "version": 1,
+            "features": {"memory": true, "daily_check": true, "people": true, "projects": true, "tasks": true},
+            "notes": {},
+        })).unwrap();
+        let features = [
+            ("get_memory", Feature::Memory),
+            ("propose_memory", Feature::Memory),
+            ("get_daily_check", Feature::Memory),
+            ("list_projects", Feature::Projects),
+            ("list_teams", Feature::People),
+        ];
+        let mut config = Config::load_in(root).unwrap();
+        for (tool, feature) in features {
+            assert!(require_tool_enabled(root, tool).is_ok(), "{tool}");
+            config.features.toggle(feature);
+            config.save(root).unwrap();
+            assert!(require_tool_enabled(root, tool).is_err(), "{tool}");
+            config.features.toggle(feature);
+            config.save(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn stable_ask_tools_remain_available_with_experiments_off() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let mut config = Config::default();
+        for feature in Feature::EXPERIMENTAL {
+            if config.features.enabled(feature) {
+                config.features.toggle(feature);
+            }
+        }
+        config.notes = Some(crate::core::notes::NotesSettings::default());
+        store_io::write(&root.join("config.json"), &config).unwrap();
+        for name in [
+            "list_meetings",
+            "search_meetings",
+            "get_meeting",
+            "list_tasks",
+        ] {
+            assert!(
+                Feature::for_tool(name)
+                    .is_none_or(|feature| feature.capability() == Capability::StableWindows),
+                "{name}"
+            );
+            assert!(require_tool_enabled(root, name).is_ok(), "{name}");
+        }
     }
 }

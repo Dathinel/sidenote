@@ -142,11 +142,13 @@ impl State {
             self.waker.clone(),
         );
         let load_grouping = !self.tasks.grouping_loaded;
-        let migration_open = self
-            .areas
-            .editor
-            .as_ref()
-            .is_some_and(|e| matches!(e.action, Action::Migrate { .. }));
+        let projects_enabled = self.config.features.projects;
+        let migration_open = projects_enabled
+            && self
+                .areas
+                .editor
+                .as_ref()
+                .is_some_and(|e| matches!(e.action, Action::Migrate { .. }));
         #[cfg(test)]
         let test_error = self.areas.test_refresh_error.take();
         let result = std::thread::Builder::new()
@@ -157,7 +159,9 @@ impl State {
                     if let Some(code) = test_error { return Err(std::io::Error::from_raw_os_error(code)); }
                     let mut running = running;
                     core::area_ops::proof_boundary(&store.root, "activity-worker")?;
-                    running.extend(core::areas::running_meetings(&store.root).unwrap_or_default());
+                    if projects_enabled {
+                        running.extend(core::areas::running_meetings(&store.root).unwrap_or_default());
+                    }
                     let mut catalog = projects.area_catalog()?;
                     catalog.problems.extend(store.catalog_problems());
                     let alias_names = projects
@@ -217,14 +221,14 @@ impl State {
                             )
                         })
                         .collect();
-                    let activity = core::areas::activity(
+                    let activity = if projects_enabled { core::areas::activity(
                         &projects,
                         &meetings,
                         &pipeline,
                         &tasks,
                         &running,
                         chrono::Utc::now(),
-                    )?;
+                    )? } else { Activity::default() };
                     let mut meeting_projects =
                         super::project::cache(&projects, &pipeline, &overrides, &tasks, &meetings);
                     for (id, target) in &activity.meetings {
@@ -236,12 +240,12 @@ impl State {
                                 .map(|p| p.name.clone());
                         }
                     }
-                    let receipts = projects.area_receipts()?;
+                    let receipts = if projects_enabled { projects.area_receipts()? } else { BTreeMap::new() };
                     let merge_undo_available = projects
                         .merges
                         .iter()
                         .filter(|(from, merge)| {
-                            merge.active && store.local_project_merge_backup(from, merge).is_ok()
+                            projects_enabled && merge.active && store.local_project_merge_backup(from, merge).is_ok()
                         })
                         .map(|(_, merge)| merge.id.clone())
                         .collect();
@@ -280,7 +284,7 @@ impl State {
                         own_device,
                         catalog,
                         activity,
-                        receipts: projects.area_receipts()?,
+                        receipts,
                         task_items: if show_cleared { tasks.clone() } else { kept },
                         checked,
                         all_tasks: tasks,

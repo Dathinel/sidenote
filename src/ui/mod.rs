@@ -396,6 +396,8 @@ impl State {
         });
         match result {
             Ok(config) => {
+                let people_enabled = config.features.people && !self.config.features.people;
+                let projects_changed = config.features.projects != self.config.features.projects;
                 self.config = config;
                 self.feature_error = None;
                 self.hex.shell.saved = Some(Instant::now() + Duration::from_secs(2));
@@ -432,10 +434,26 @@ impl State {
                 }
                 if self.config.features.memory {
                     self.refresh_memory(true);
+                } else {
+                    self.stop_memory_rewrites();
                 }
-                if self.config.features.daily_check {
+                if people_enabled {
+                    let root = &self.store.root;
+                    self.people = people::PeopleUi::load(
+                        root,
+                        &self.meetings,
+                        &mut core::UiPrefs::load(root),
+                        &self.config,
+                    );
+                    self.companies = companies::CompanyUi::load(root);
+                }
+                if self.config.features.enabled(core::Feature::DailyCheck) {
                     self.check.refresh();
                 }
+                if projects_changed {
+                    self.refresh_areas();
+                }
+                self.request_refresh();
             }
             Err(error) => {
                 self.feature_error = Some(edit_worker::SaveError::from(&error).message().into())
@@ -468,7 +486,11 @@ impl State {
             ),
         };
         let tasks = tasks::TasksState::load(&meetings, store.root.clone());
-        let companies = companies::CompanyUi::load(&store.root);
+        let companies = if config.features.people {
+            companies::CompanyUi::load(&store.root)
+        } else {
+            companies::CompanyUi::default()
+        };
         let mut prefs = core::UiPrefs::load(&store.root);
         let people = people::PeopleUi::load(&store.root, &meetings, &mut prefs, &config);
         let mut s = Self {
@@ -576,7 +598,9 @@ impl State {
             footer_minute: 0,
             waker: None,
         };
-        s.load_annotation_options();
+        if s.config.features.annotations {
+            s.load_annotation_options();
+        }
         let device_name = if rune::tooling::headless_run().is_some() {
             "DEMO-PC".to_owned()
         } else {
@@ -599,7 +623,7 @@ impl State {
         s.refresh_list();
         s.load_saved();
         s.refresh_ask_model_input();
-        if s.config.features.daily_check {
+        if s.config.features.enabled(core::Feature::DailyCheck) {
             s.check.refresh();
         }
         if s.config.features.memory {
@@ -1813,8 +1837,9 @@ impl State {
     fn refresh_options(&self) -> refresh::Options {
         refresh::Options {
             check_date: self.check.date,
+            people: self.config.features.people,
             memory: self.config.features.memory,
-            check: self.config.features.daily_check,
+            check: self.config.features.enabled(core::Feature::DailyCheck),
         }
     }
     pub fn request_refresh(&self) {

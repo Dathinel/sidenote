@@ -244,7 +244,8 @@ impl State {
         }
     }
     pub fn refresh_annotations(&mut self) {
-        if self.annotations.loading
+        if !self.config.features.annotations
+            || self.annotations.loading
             || self.annotations.busy
             || self.annotations.review.is_some()
             || rune::tooling::headless_run().is_some()

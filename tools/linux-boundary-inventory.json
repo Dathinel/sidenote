@@ -77,9 +77,9 @@
 
   "src/core/companies_tests.rs": "03038381f33d5ca95247c95945096f6edac31857fdb90ebfaf345601b2a52f56",
 
-  "src/core/config.rs": "ee3c736f0c81e3a582bab7fb7cb7e1d734f590dad30d7d2ffd5166cf05417bf3",
+  "src/core/config.rs": "89e48302c564237ab7f148705e5dc8d5cc4bedb11f1894a9e8484264f6c92120",
 
-  "src/core/daily_check.rs": "a23f26f0296493c7a3f8ee731dc0f8a032cd3a237f84ad947c4c61f9d1be6a69",
+  "src/core/daily_check.rs": "f7722606dab126e43d935b0fda85f560e31880f2117bfb77ecce792144172879",
 
   "src/core/device.rs": "1b5427307e25c2de17c71a124179d896bc7dd841af00c2a58a0db8282c33ca01",
 
@@ -363,7 +363,7 @@
 
   "src/service.rs": "9a240c94b2055fa16928cc3311189a5a411371bca9311eb6a7b36728fc646b17",
 
-  "src/service/schedule.rs": "e2049ae50e264bf47e77ae366ef91a21e78203fa25362fbd5a53b332dc9cb5c3",
+  "src/service/schedule.rs": "e78d425e0275a169d641813e081413bf5b3ccbaebbf9c74b1c416cc636edcccf",
 
   "src/service/speech/events.rs": "b47390c56d9a46f972a510e407c496c166647503a74ddbcacc17e7fc0b99c298",
 
@@ -389,13 +389,13 @@
 
   "src/ui/ai_notes.rs": "4f070e124e1f704230aa1f3348b0d5050f9ed795a13320175726fe5e1de039af",
 
-  "src/ui/annotations.rs": "aa223e605496c0697de0cd77aa66a4af131cbf31f29b057c28995b38599e231a",
+  "src/ui/annotations.rs": "d89f61da3262022e1b0e4db73bf7d57586ea7a657e57c0851ea3ec54cccc7f3b",
 
-  "src/ui/annotations/notebooks.rs": "cf11716c9f2c3551aef0e0b8f1c01cedc75f48f23b242d7ad309b1c2daa44cd8",
+  "src/ui/annotations/notebooks.rs": "b01a26b59d7c308ea9b6b071ff7c93afab8271d55ddfb4fe616c76411616645d",
 
-  "src/ui/annotations/workflow.rs": "d07126006381798ffb3fe767f792144558880034a85c013709704866277f95d2",
+  "src/ui/annotations/workflow.rs": "8ced2a99d89386732058f5defc0a5838ec4fd0c6e5202745a1d0f6f161bb0ecd",
 
-  "src/ui/area.rs": "8d8707a6b818d7e08880b92747098277e3c0d46c1badfa0dd27493047d16aad4",
+  "src/ui/area.rs": "3ae9616e2b324dc17e6837ff65fc4d6db5e61a420eae3b823de4730720a4cb55",
 
   "src/ui/area_scene.rs": "ed9d0a3291369f5ab6a8a3e2c0da8a04bb05ba7155a065cd2604c9da7b1bf160",
 
@@ -405,7 +405,7 @@
 
   "src/ui/benchmark.rs": "3eea004745d87db3e40f407a7d320827a47772f1185355a0c6397be3df15e9ff",
 
-  "src/ui/check.rs": "6c73adf807e2eaa516444a13af4c30fdafbd1ec930855dd6521e1c39df6aad7b",
+  "src/ui/check.rs": "9d16a335a21dcd9ff90a3a8d7d24665f9a9134f51dfbc10d734a97fe4e1d79f9",
 
   "src/ui/cloud_ask.rs": "0b3cd72ff4fabf3bfdf64e0017c44851bef8113df24feede14e991364312e0ae",
 
@@ -433,11 +433,11 @@
 
   "src/ui/mcp_connect.rs": "b7372660109d111f146b60c90b4a3387c66b2e9eebdc0332ac2bc07034cbba20",
 
-  "src/ui/memory.rs": "ef2dfa9a3d6fc311f00b709e4c006adc7e66878cf58583fa53bc684ef5a007ac",
+  "src/ui/memory.rs": "7414eb22f15f02acfbd80d3595c000712abe5b8c905832b7daa6777fa6a110e6",
 
   "src/ui/memory/settled.rs": "9d0915dfa235083870103a6872b2fc6e23c267328989d288b2299e1e0e460b58",
 
-  "src/ui/mod.rs": "5fafa0212a6ca21d28db4657ea99475856c87640e1986959f1e1353a13979729",
+  "src/ui/mod.rs": "e473cd52437e3b6c435550c431dc6fe3528528e46a569aa0fca3b68babc3f131",
 
   "src/ui/models.rs": "607860762e895e69abcfe1e5a3686747db62be0c179248de8651e49df0482b6d",
 
@@ -447,7 +447,7 @@
 
   "src/ui/recording_state_tests.rs": "724641313ec0e43831ce4c8b91b667bbae152998dc717c9a00be89845a0fb8a0",
 
-  "src/ui/refresh.rs": "1d5b4b019a1bf734270061b73457358199227bdd33e72d9c48a59943b5a2af86",
+  "src/ui/refresh.rs": "1f80518c7a033cb08a32171fec989a416cef9f57918fa85b1b9a55f993bb6854",
 
   "src/ui/relay.rs": "661d261d0e621e417a27f04cb4c6d75c23d9bf00aa74432a3c4714e243a83658",
 

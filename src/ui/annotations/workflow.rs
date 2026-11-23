@@ -144,6 +144,9 @@ impl State {
             .is_some_and(|t| t.id == id && t.current())
     }
     pub(super) fn annotation_options(&self) -> Result<generation::Options, String> {
+        if !self.config.features.annotations {
+            return Err("Annotations and pictures is off.".into());
+        }
         if let Some(options) = &self.annotations.options {
             generation::available(options)?;
             return Ok(options.clone());
@@ -215,7 +218,10 @@ impl State {
         }
     }
     fn start_annotation(&mut self) {
-        if rune::tooling::headless_run().is_some() || self.annotations.record_busy {
+        if !self.config.features.annotations
+            || rune::tooling::headless_run().is_some()
+            || self.annotations.record_busy
+        {
             return;
         }
         self.annotations.record_busy = true;

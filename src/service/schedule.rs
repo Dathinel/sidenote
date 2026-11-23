@@ -54,7 +54,9 @@ pub(crate) fn tick() -> io::Result<()> {
     let now = Local::now();
     if !schedule.enabled
         || (now.hour(), now.minute()) < (schedule.hour, schedule.minute)
-        || !core::Config::load()?.features.daily_check
+        || !core::Config::load()?
+            .features
+            .enabled(core::Feature::DailyCheck)
         || !core::DeviceSettings::load()?.daily_check
     {
         return Ok(());
