@@ -2807,8 +2807,29 @@ fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, page: Page, tab: us
             .child(privacy(s, k, p))
             .children(Page::ConnectedApps.visible(CHANNEL).then(|| {
                 col()
-                    .child(roles::SMALL.wrap("Connected apps can read meetings, typed notes, tasks and memory, and send them to their AI provider.", p.soft))
-                    .child(tasks::button("Manage connected apps", "privacy-connected-apps", false, p).on_press(|s: &mut State| navigate(s, Page::ConnectedApps, 0)))
+                    .w_full()
+                    .min_w(0.0)
+                    .mt(roles::GROUP_TOP)
+                    .gap(roles::SECTION_GAP)
+                    .child(
+                        roles::SMALL
+                            .wrap("Connected apps can read meetings, typed notes, tasks and memory, and send them to their AI provider.", p.soft)
+                            .w_full()
+                            .min_w(0.0),
+                    )
+                    .child(
+                        row().w_full().min_w(0.0).child(
+                            crate::ui::widgets::link("Manage connected apps", p)
+                                .key("privacy-connected-apps")
+                                .label("Manage connected apps")
+                                .shrink()
+                                .min_h(32.0)
+                                .px(0.0)
+                                .py(7.0)
+                                .focus_ring(2.0, 2.0, p.accent)
+                                .on_press(|s: &mut State| navigate(s, Page::ConnectedApps, 0)),
+                        ),
+                    )
             }))
             .child(settings_card(
                 "Hex · Retention and files",
@@ -3807,6 +3828,62 @@ mod tests {
         let pages: Vec<_> = Page::ALL.into_iter().collect();
         let index = pages.iter().position(|p| *p == Page::Helpers).unwrap();
         assert_eq!(pages[index + 1], Page::ConnectedApps);
+    }
+
+    #[test]
+    fn privacy_connected_apps_disclosure_fits_and_opens_the_page_on_dev() {
+        crate::test_paths::isolate();
+        let mut state = State::new();
+        state.open_hex();
+        // Keep the navigation test from discovering apps on this machine.
+        state.connection.busy = true;
+        navigate(&mut state, Page::Privacy, 0);
+        let mut rt = rune::Runtime::with_text(
+            state,
+            crate::ui::view,
+            (390.0, 900.0),
+            rune::Env::default(),
+            rune::text::TextSystem::new(
+                crate::ui::theme::fonts(),
+                (crate::ui::theme::SANS, "Inter"),
+            ),
+        );
+        rt.settle_all();
+        rt.frame(0.0);
+        let elements = rt.elements();
+        let disclosure = elements.iter().find(|element| {
+            element
+                .text
+                .as_deref()
+                .is_some_and(|text| text.starts_with("Connected apps can read meetings"))
+        });
+        let action = elements
+            .iter()
+            .find(|element| element.key.as_deref() == Some("privacy-connected-apps"));
+        if CHANNEL == Channel::Stable {
+            assert!(disclosure.is_none() && action.is_none());
+            return;
+        }
+        let details = disclosure.unwrap().rect;
+        let action = action.unwrap().rect;
+        let summary = elements
+            .iter()
+            .find(|element| element.key.as_deref() == Some("ai-notes-settings"))
+            .unwrap()
+            .rect;
+        assert!(details[1] > summary[1] + summary[3]);
+        assert_eq!(action[0], details[0]);
+        assert!(action[1] > details[1] + details[3]);
+        assert!(action[0] + action[2] <= details[0] + details[2]);
+
+        let x = action[0] + action[2] / 2.0;
+        let y = action[1] + action[3] / 2.0;
+        rt.pointer_move(x, y);
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        rt.frame(0.2);
+        assert_eq!(active(&rt.state), (Page::ConnectedApps, 0));
+        assert!(rt.find("mcp-connect").is_some());
     }
 
     #[test]
