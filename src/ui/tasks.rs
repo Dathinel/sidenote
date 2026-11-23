@@ -178,8 +178,8 @@ pub struct TasksState {
     pub pending_rev: u64,
     pub board_cache: std::cell::RefCell<Option<(BoardKey, std::rc::Rc<core::BoardView>)>>,
     pub options_cache: std::cell::RefCell<Option<board::OptionsCache>>,
-    /// A card to scroll into view once it is drawn, and the frames left to try.
-    pub reveal: Option<(String, u8)>,
+    /// Meeting and stable task identity of the card to bring into view.
+    pub reveal: Option<(String, String)>,
     /// What the last move did, for the polite status line, and when it goes.
     pub board_live: Option<(String, std::time::Instant)>,
     /// Cards drawn per column before "Show more". Kept for this session only.
