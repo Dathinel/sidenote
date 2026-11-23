@@ -287,6 +287,7 @@ def refine_p8_pages(output, exe):
 def main():
  global OUT, EXE
  parser=argparse.ArgumentParser();parser.add_argument('--cloud-ask',action='store_true');parser.add_argument('--quick',action='store_true');parser.add_argument('--only');parser.add_argument('--search-keys',action='store_true')
+ parser.add_argument('--channel', choices=('stable','nightly'), default='nightly')
  modes=parser.add_mutually_exclusive_group()
  modes.add_argument('--meeting-lift',choices=['before','after'])
  modes.add_argument('--refine-p1',choices=['before','after'])
@@ -329,16 +330,24 @@ def main():
    for name,scene in setup_scenes:
     jobs.append((name,scene,width,theme,900,None))
    for name,scene,height in PAGES:
+    if args.channel=='stable' and name in ('sync','connected-apps'):continue
     # The narrow Engine tab is longer than the wide one; the render checks that nothing is cut off.
     jobs.append((name,scene,width,theme,7600 if width==390 and scene.startswith('settings-engine') else height,None))
    for name,scene,events in [('updates-available','updates-ready',None),('updates-checking','updates-checking',None),('hex-scrolled','settings-hex-expanded',[tap('settings-jump-5')]),('recording-expanded','settings-recording-expanded',None),('summaries-expanded','settings-summaries-expanded',None),('helpers-expanded','settings-helpers-expanded',None),('speech-expanded','settings-speech-expanded',None),('privacy-expanded','settings-privacy',[tap('notes-privacy-details')]),('diagnostics-expanded','settings-diagnostics',None),('sync-expanded','settings-sync-expanded',None),('people-editor','people-team-editor',[tap('team-advanced')])]:
+    if args.channel=='stable' and name=='sync-expanded':continue
     jobs.append((name,scene,width,theme,2200 if 'expanded' in name or 'editor' in name else 900,events))
  jobs.append(('people-suggestion','people-suggestion',1280,'dark',1800,None))
  # Existing legacy search proof keeps its original 800px viewport and exact interaction.
  events=json.loads((ROOT/'tools/ui-scripts/settings-search.json').read_text())['events'][:-1]
  jobs.append(('search','settings-search',1280,'light',800,events))
+ mcp_scene='settings-general' if args.channel=='stable' else 'settings-mcp-mixed'
  for query in ('MCP','connect','Claude','Codex','Cursor','OpenCode'):
-  jobs.append(('mcp-search-'+query,'settings-mcp-mixed',1280,'light',1200,[tap('hex-filter',.2),dict(type='type',text=query,t=.4)]))
+  jobs.append(('mcp-search-'+query,mcp_scene,1280,'light',1200,[tap('hex-filter',.2),dict(type='type',text=query,t=.4)]))
+ if args.channel=='stable':
+  for query in ('Sync','Connected apps'):
+   typed=dict(type='type',text=query,t=.4)
+   jobs.append(('hidden-search-'+query,'settings-general',1280,'light',900,[tap('hex-filter',.2),typed]))
+   jobs.append(('hidden-finder-'+query,'settings-general',1280,'light',900,[dict(type='key',name='k',cmd=True,t=.2),typed]))
  if args.cloud_ask:
   jobs=[('cloud-ask','settings-cloud-ask',1280,'dark',1400,None),('cloud-ask-label','cloud-ask-answer',1280,'dark',900,None)]
  if args.search_keys:

@@ -88,9 +88,17 @@ def main():
             "COMPUTERNAME": "fixture-laptop",
         }.items():
             environment[name] = str(value)
+        command = [str(binary), "--mcp", "--data-dir", str(state), "--meetings-dir", str(meetings),
+                   "--peers-dir", str(peers)]
+        if "--stable" in sys.argv[2:]:
+            result = subprocess.run(command, stdin=subprocess.DEVNULL, capture_output=True,
+                                    env=environment, creationflags=subprocess.CREATE_NO_WINDOW,
+                                    timeout=10)
+            assert result.returncode == 2 and b"--mcp is unavailable in Sidenote Stable." in result.stderr
+            assert not result.stdout and snapshot() == before
+            return
         process = subprocess.Popen(
-            [str(binary), "--mcp", "--data-dir", str(state), "--meetings-dir", str(meetings),
-             "--peers-dir", str(peers)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, text=True, encoding="utf-8", env=environment,
             creationflags=subprocess.CREATE_NO_WINDOW,
         )

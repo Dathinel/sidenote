@@ -332,6 +332,12 @@ impl Drop for Live {
 }
 
 impl Live {
+    pub(super) fn pause_feed(&self) {
+        let mut feed = self.feed.lock().unwrap_or_else(|e| e.into_inner());
+        self.watching.store(false, Ordering::Relaxed);
+        feed.version += 1;
+    }
+
     #[cfg(all(test, windows))]
     pub(super) fn age_past_start_timeout(&mut self) {
         self.began = Instant::now() - START_WAIT - Duration::from_secs(1);
@@ -635,7 +641,7 @@ impl State {
             );
             let _ = thread::Builder::new()
                 .name("live-feed".into())
-                .spawn(move || feed_loop(&feed, &cancel, &watching, &waker));
+                .spawn(move || feed_loop(&feed, &cancel, &watching, &waker, feed_io::read_rolling));
         }
         self.live = Some(live);
         true
@@ -734,6 +740,9 @@ impl State {
 
     /// Called after each Hex sample and each scan: moves the page along its three phases.
     pub fn live_sync(&mut self) {
+        if self.hex_stop_pending() {
+            return;
+        }
         self.parts_sync();
         if self.live.is_none() && !self.hex.parts_restore_checked {
             return;
@@ -902,7 +911,13 @@ impl State {
 // ---- the live transcript and the notes -------------------------------------------------------
 
 /// Reads while the page is shown or a stopped meeting still needs a summary outcome.
-fn feed_loop(feed: &Mutex<Feed>, cancel: &AtomicBool, watching: &AtomicBool, waker: &rune::Waker) {
+fn feed_loop(
+    feed: &Mutex<Feed>,
+    cancel: &AtomicBool,
+    watching: &AtomicBool,
+    waker: &rune::Waker,
+    mut read: impl FnMut(&Path, Option<feed_io::Stamp>) -> std::io::Result<Read>,
+) {
     let root = sidenote::core::meetings_dir();
     let mut wait = Duration::from_millis(600);
     while !cancel.load(Ordering::Relaxed) {
@@ -914,8 +929,13 @@ fn feed_loop(feed: &Mutex<Feed>, cancel: &AtomicBool, watching: &AtomicBool, wak
         if !watching.load(Ordering::Relaxed) {
             continue;
         }
+        let generation;
         let (mut folder, hint, start_ms, last) = {
             let f = feed.lock().unwrap_or_else(|e| e.into_inner());
+            if !watching.load(Ordering::Relaxed) {
+                continue;
+            }
+            generation = f.version;
             (f.folder.clone(), f.hint.clone(), f.start_ms, f.stamp)
         };
         if folder.is_none() {
@@ -924,21 +944,34 @@ fn feed_loop(feed: &Mutex<Feed>, cancel: &AtomicBool, watching: &AtomicBool, wak
         let Some(folder) = folder else {
             continue;
         };
-        let read = feed_io::read_rolling(&folder, last);
+        let read = read(&folder, last);
+        let words = match &read {
+            Ok(Read::Lines(lines, _)) => lines.iter().map(|l| l.text.split(' ').count()).sum(),
+            _ => 0,
+        };
         let notes_problem = feed_io::notes_problem(&folder);
         let job = folder
             .file_name()
             .and_then(|id| id.to_str())
             .and_then(sidenote::core::notes::status);
-        let mut f = feed.lock().unwrap_or_else(|e| e.into_inner());
-        let mut changed = feed_summary_state(
-            &mut f,
+        let mut summary = Feed::default();
+        feed_summary_state(
+            &mut summary,
             &folder,
             &sidenote::core::state_dir(),
             sidenote::core::notes::scripts_policy() == "off",
             job.as_ref(),
         );
-        changed |= f.folder.as_ref() != Some(&folder) || f.notes_problem != notes_problem;
+        let mut f = feed.lock().unwrap_or_else(|e| e.into_inner());
+        if !watching.load(Ordering::Relaxed) || f.version != generation {
+            continue;
+        }
+        let mut changed = f.folder.as_ref() != Some(&folder)
+            || f.notes_problem != notes_problem
+            || f.transcript != summary.transcript
+            || f.summary_skip != summary.summary_skip;
+        f.transcript = summary.transcript;
+        f.summary_skip = summary.summary_skip;
         f.notes_problem = notes_problem;
         f.folder = Some(folder);
         match read {
@@ -948,7 +981,6 @@ fn feed_loop(feed: &Mutex<Feed>, cancel: &AtomicBool, watching: &AtomicBool, wak
                 }
             }
             Ok(Read::Lines(lines, stamp)) => {
-                let words = lines.iter().map(|l| l.text.split(' ').count()).sum();
                 if words > f.words {
                     f.last_words = Some(Instant::now());
                 }
@@ -975,6 +1007,27 @@ fn feed_loop(feed: &Mutex<Feed>, cancel: &AtomicBool, watching: &AtomicBool, wak
 }
 
 impl State {
+    #[cfg(test)]
+    pub(super) fn stop_during_feed_read(&mut self) {
+        let dir = tempfile::tempdir().unwrap();
+        let rolling = dir.path().join("transcript.rolling.ndjson");
+        std::fs::write(rolling, r#"{"text":"Synthetic line"}"#).unwrap();
+        let live = self.live.as_ref().unwrap();
+        let (feed, watching) = (live.feed.clone(), live.watching.clone());
+        feed.lock().unwrap().folder = Some(dir.path().to_owned());
+        watching.store(true, Ordering::Relaxed);
+        let cancel = AtomicBool::new(false);
+        let waker: rune::Waker = Arc::new(|| {});
+        feed_loop(&feed, &cancel, &watching, &waker, |folder, last| {
+            let result = feed_io::read_rolling(folder, last);
+            assert!(matches!(&result, Ok(Read::Lines(lines, _)) if lines.len() == 1));
+            self.hex_record_stop(hex::recording_id(self));
+            cancel.store(true, Ordering::Relaxed);
+            result
+        });
+        assert!(feed.lock().unwrap().lines.is_empty());
+    }
+
     /// Called on every poll. Hands the reader thread its hint and whether to read, adopts the
     /// meeting folder, and saves the notes 2 s after the last key. True when the page changed.
     pub fn live_tick(&mut self) -> bool {
@@ -986,6 +1039,7 @@ impl State {
             self.parts_sync();
         }
         let saved = self.live_saved();
+        let stopping = self.hex_stop_pending();
         let visible = self.on_live() && hex::window_shown();
         let hint = hex::recording_id(self);
         let start_ms = hex::recording_start(self).map(|(at, _)| at.timestamp_millis());
@@ -997,7 +1051,7 @@ impl State {
         }
         let mut changed = saved;
         live.watching.store(
-            live.session.is_none() && (visible || live.phase == Phase::Making),
+            !stopping && live.session.is_none() && (visible || live.phase == Phase::Making),
             Ordering::Relaxed,
         );
         {
@@ -1017,7 +1071,7 @@ impl State {
             }
         }
         // A recording that was already running (the app was restarted) has notes on disk.
-        if let (Some(folder), false) = (live.folder.clone(), live.notes_loaded) {
+        if let (Some(folder), false, false) = (live.folder.clone(), live.notes_loaded, stopping) {
             live.notes_loaded = true;
             let existing = feed_io::read_notes(&folder);
             if self.live_notes.text.is_empty() && !existing.is_empty() {
@@ -1728,10 +1782,36 @@ pub fn your_notes(notes: &str, p: Palette) -> El {
         .child(body)
 }
 
+fn stopping_view(s: &State, p: Palette, narrow: bool, timed_out: bool) -> El {
+    let status = if timed_out {
+        hex::stop::UNCONFIRMED
+    } else {
+        "Finishing the transcript"
+    };
+    col()
+        .key("live-stop-progress")
+        .w_full()
+        .gap(16.0)
+        .child(text_title(&heading(s), if narrow { 28.0 } else { 36.0 }, p))
+        .child(roles::SECTION.wrap("You can leave this page", p.ink))
+        .child(roles::READ.wrap(status, p.soft).role("status"))
+        .children(timed_out.then(|| {
+            quiet_button("Check again", "live-stop-recheck", p)
+                .self_start()
+                .px(0.0)
+                .on_press(|s: &mut State| s.hex_recheck_stop())
+        }))
+        .children((!s.live_notes.text.trim().is_empty()).then(|| your_notes(&s.live_notes.text, p)))
+        .child(link("Back to meetings", p).on_press(|s: &mut State| s.leave_live()))
+}
+
 pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -> El {
     let phase = s.live.as_ref().map_or(Phase::Recording, |l| l.phase);
+    let stopping = s.hex_stop_pending();
     let body = if s.live.as_ref().is_some_and(|l| l.close_failed) {
         notes_view(s, k, p, narrow, phase == Phase::Starting)
+    } else if stopping {
+        stopping_view(s, p, narrow, s.hex_stop_unconfirmed())
     } else {
         match phase {
             Phase::Making => making_view(s, p, narrow),
@@ -1740,7 +1820,7 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
             Phase::Recording => notes_view(s, k, p, narrow, false),
         }
     };
-    let lost = phase == Phase::Recording && !s.hex_running();
+    let lost = !stopping && phase == Phase::Recording && !s.hex_running();
     let mut doc = col()
         .key("live")
         .w_full()
@@ -1777,7 +1857,7 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
         .fill(p.bg)
         .child(
             scroll(col().w_full().items_center().child(doc), "live-scroll").min_h(
-                if phase == Phase::Making {
+                if phase == Phase::Making || stopping {
                     0.0
                 } else {
                     s.live_document_h
@@ -1786,7 +1866,8 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
                 },
             ),
         );
-    if phase != Phase::Making || s.live.as_ref().is_some_and(|l| l.session.is_some()) {
+    if !stopping && (phase != Phase::Making || s.live.as_ref().is_some_and(|l| l.session.is_some()))
+    {
         pane = pane.child(bar(s, k, p, narrow, layer));
     }
     pane

@@ -622,7 +622,8 @@ fn no_id_stop(phase: &'static str) {
         data.commands.clear();
         data.delay = Duration::from_millis(1000);
     }
-    Fixture::stop(&mut state);
+    state.stop_during_feed_read();
+    Fixture::finish(&mut state);
     {
         let mut data = api.data.lock().unwrap();
         assert_eq!(data.stops, 1, "no-ID {phase} must send exactly one Stop");
@@ -632,6 +633,12 @@ fn no_id_stop(phase: &'static str) {
         );
         assert_eq!(data.id, None);
         data.delay = Duration::ZERO;
+    }
+    Fixture::stop_status(&mut state);
+    if state.hex_stop_pending() {
+        let idle = state.hex.engine.status_for_command().unwrap();
+        state.hex_apply(Msg::Status(Ok(idle)));
+        Fixture::stop_status(&mut state);
     }
     assert!(state.hex.error.is_none());
     assert_eq!(state.live.as_ref().unwrap().phase, Phase::Making);
@@ -1086,29 +1093,51 @@ fn meeting_pause_resume_uses_hex_commands_and_keeps_one_meeting() {
             .len(),
         1
     );
+    use crate::ui::live::Phase;
+    let mut transcribing = state.hex.engine.status_for_command().unwrap();
+    transcribing.recording = None;
+    transcribing.meeting_state = "transcribing".into();
+    api.data.lock().unwrap().stop_state = Some("transcribing");
     state.meeting_pause();
+    assert!(state.hex_stop_pending());
+    let manifest = hex.join("100-1/manifest.json");
+    std::fs::write(
+        &manifest,
+        r#"{"status":"transcribing","duration_ms":90000}"#,
+    )
+    .unwrap();
+    state.hex_apply(Msg::Status(Ok(transcribing.clone())));
+    state.live_sync();
+    state.parts_sync();
+    state.meeting_pause();
+    state.meeting_resume();
+    state.meeting_generate();
+    state.hex_record_stop(None);
+    let live = state.live.as_ref().unwrap();
+    assert_eq!(live.phase, Phase::Recording);
+    assert_eq!(live.session.as_ref().unwrap().parts[0].duration_ms, 60000);
     Fixture::finish(&mut state);
+    Fixture::stop_status(&mut state);
     assert_eq!(api.data.lock().unwrap().stops, 1);
-    assert_eq!(
-        state.live.as_ref().unwrap().phase,
-        crate::ui::live::Phase::Paused
-    );
-    api.data.lock().unwrap().meeting_state = Some("transcribing");
-    let status = state.hex.engine.status_for_command().unwrap();
-    assert_eq!(status.meeting_state, "transcribing");
-    state.hex_apply(Msg::Status(Ok(status)));
-    assert_eq!(
-        state.live.as_ref().unwrap().phase,
-        crate::ui::live::Phase::Paused
-    );
+    state.hex_apply(Msg::Status(Ok(transcribing)));
+    assert!(state.hex_stop_pending());
+    assert!(state.hex_stop_tick(Instant::now() + Duration::from_secs(31), &mut Tx::default()));
+    assert!(state.hex_stop_unconfirmed());
+    state.parts_sync();
+    let live = state.live.as_ref().unwrap();
+    assert_eq!(live.session.as_ref().unwrap().parts[0].duration_ms, 60000);
     api.data.lock().unwrap().meeting_state = None;
     assert!(
         !sidenote::core::state_dir()
             .join("local/notes-jobs")
             .exists()
     );
-    let idle = state.hex.engine.status_for_command().unwrap();
-    state.hex_status_at(Ok(idle), Instant::now());
+    std::fs::write(&manifest, r#"{"status":"complete","duration_ms":90000}"#).unwrap();
+    state.hex_recheck_stop();
+    Fixture::stop_status(&mut state);
+    let live = state.live.as_ref().unwrap();
+    assert_eq!(live.phase, Phase::Paused);
+    assert_eq!(live.session.as_ref().unwrap().parts[0].duration_ms, 90000);
     let folder = sidenote::core::meeting_parts::inputs(&sidenote::core::state_dir()).join("100-1");
     let paused = sidenote::core::Meeting::load_pending(&folder).unwrap();
     assert!(

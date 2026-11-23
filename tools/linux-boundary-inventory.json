@@ -77,7 +77,7 @@
 
   "src/core/companies_tests.rs": "03038381f33d5ca95247c95945096f6edac31857fdb90ebfaf345601b2a52f56",
 
-  "src/core/config.rs": "ee3c736f0c81e3a582bab7fb7cb7e1d734f590dad30d7d2ffd5166cf05417bf3",
+  "src/core/config.rs": "46dd2d4d4be65f0ff2555ff4f4db1beada597334b5c407ac8ddcb66801135960",
 
   "src/core/daily_check.rs": "a23f26f0296493c7a3f8ee731dc0f8a032cd3a237f84ad947c4c61f9d1be6a69",
 
@@ -107,9 +107,9 @@
 
   "src/core/live_edit.rs": "c54f9c6c5cec7987e2e17116c5487179326457bc637bc422d4417c3e7c05ea36",
 
-  "src/core/mcp_connect.rs": "751a61735a486de995d83c35a379df25f52117f2c1f0511b493242fc5bfae9ef",
+  "src/core/mcp_connect.rs": "2988ef0b0f9dcf354d6f8997d90845f2cf97f965b4cea667cc574f8d4dc9ca03",
 
-  "src/core/mcp_connect/isolated_tests.rs": "5cfa80ba44ac60c9df438f5318291637c27b669845fcaecb0852ccda7ec45745",
+  "src/core/mcp_connect/isolated_tests.rs": "b259b1ae2f8caeb6ef380ff8ac0aeb1b6fef954ddb4debf24a89b24da167021d",
 
   "src/core/mcp_connect/json_config.rs": "a5597e62557288a1ffdc8a5cf00a3caefbe3b905a0a63e733fe4c9d1df5e8fac",
 
@@ -269,13 +269,13 @@
 
   "src/core/recording_source/tests.rs": "f599f85ce6e360ba9ee314037e8f7036c9de16939d02cee773662730c9b84f84",
 
-  "src/core/relay_preview.rs": "6bd8a988f834b9b6079cc9a88ecdbe27daf08d82389c1361080220e309096458",
+  "src/core/relay_preview.rs": "5088a451d31db1364eae37f30ca88a97ff1232c56d7aad5753052243362ae253",
 
-  "src/core/relay_preview/migration.rs": "e9e0e4c86be43027861825ba387c26ca70a9f8567964de61c9113e2e79a8559f",
+  "src/core/relay_preview/migration.rs": "b17e4acbce444f4db154ac6b15b76c33d4e0f05d54eb44cc0678b34db83b9b02",
 
-  "src/core/relay_preview/operations.rs": "9dcd718a190ba735d59805a466b49bce3554661cfe66b6495900db9b10ea29ba",
+  "src/core/relay_preview/operations.rs": "0c7146202b1c86b40937bef20e4083c9e93d329c5eba83600f4296b848ca344a",
 
-  "src/core/relay_preview/pairing.rs": "3a234b69c8441c987a06ce7ff727076f4443f8b25d4006d087480989d36753fb",
+  "src/core/relay_preview/pairing.rs": "64b36f6d389d185a8f5466facc2c9694a13f0021b13a3e8e0ee78ff78eb3618a",
 
   "src/core/relay_preview/shared.rs": "373e85ff8212a7cc4477c311aefb04c597837df07b6c9ec996270bda73d80bd8",
 
@@ -307,7 +307,7 @@
 
   "src/core/store_io.rs": "d46f5e4a16ec08cb3279e1ba72d59c66703875ca229ebd2969dbadb9b168aa37",
 
-  "src/core/sync_state.rs": "5ed66965cebe7578baf77900557839707064f555a026b9de218895634083f664",
+  "src/core/sync_state.rs": "132a2c3609f1fe95db0f4298bcee4f54b1d51e064db1c848f90adf2fb922c16f",
 
   "src/core/tasks.rs": "0071ad0533947f13a2e69faedad2286213197648c5db7fc4540725f7c7b78dec",
 
@@ -337,7 +337,7 @@
 
   "src/mcp/access.rs": "63a5df969d655db4d06a7d8e0bb21494a263614d597a6cf8138f238da4542df2",
 
-  "src/mcp/network.rs": "fae9133da2582d00c66ab63ce0ad5bf6397234eb41c8184809888314ae902369",
+  "src/mcp/network.rs": "52582f512b6621939d0c63dc451a1ec41eeba4561c9e7ba5239450c8d7f04a29",
 
   "src/meeting_icon.rs": "b9f78ad6272c44851d62f2062a4ac71c5332fb1ea854e0938f719ad254f7fcd5",
 
@@ -361,7 +361,7 @@
 
   "src/response_time.rs": "508cc3d4ae57ac8277982199a998f222b8c1ffc2bccd11b55920ce3152c43540",
 
-  "src/service.rs": "9a240c94b2055fa16928cc3311189a5a411371bca9311eb6a7b36728fc646b17",
+  "src/service.rs": "2eb3f34868751414697aedf3756fe49f95a2d69626ca0b46e2f89a385837d19a",
 
   "src/service/schedule.rs": "e2049ae50e264bf47e77ae366ef91a21e78203fa25362fbd5a53b332dc9cb5c3",
 
@@ -379,7 +379,7 @@
 
   "src/service/workers.rs": "d3e3abd1f69114ce2798268fdcbf9507b83b27a9137a40421367125b042dbc89",
 
-  "src/sync_owner.rs": "bbc696ecd1b626713030f8001a3c16a30fa766920dea3339371b5c28e8bab554",
+  "src/sync_owner.rs": "bb90b9271a90a27082a2d307e2aa6ab9c611005f7067a19a2684c02bb74d74e3",
 
   "src/sync_owner/commands.rs": "579936c9e86261f16a13e22a3337e7d00d2cd16b58cf1ac67e5cbd4b27e7b283",
 
@@ -413,15 +413,17 @@
 
   "src/ui/final_refresh_proofs.rs": "4989e687f2aa229c6ad0f7883147d48ae569a29e8b271ab8cf96e9c62b68d56c",
 
-  "src/ui/hex.rs": "569bd92ae949ef590033ec7e4122ba3cf2487742eebfe64403aa1eab375c4036",
+  "src/ui/hex.rs": "d7dd88b21deecc7afdb346a49bf65ddf62cedd23f50684b8f2965e8e01ed2631",
 
-  "src/ui/hex/connection/stop_tests.rs": "fd6214e09f6c3fed6acde325e77af3e21c3d2409dfd90e54210dc8a5f547941e",
+  "src/ui/hex/connection/stop.rs": "48def6ec1d077a8b3639e62179355b3937453295da8d79745d71bd53f5dbd758",
 
-  "src/ui/hex/connection/stop_tests/api.rs": "249e5ba679241506285eb27864920f89940ad44d599167bc543ff91b736ef175",
+  "src/ui/hex/connection/stop_tests.rs": "75bfb02b34641a9344600d8083f8dedb7a3f22b60dadbbadf2632f2c1b1b62ca",
+
+  "src/ui/hex/connection/stop_tests/api.rs": "fdbace0c0b926c5a8520497d841c9180e611c1724a5e1c25464204e0e8285fde",
 
   "src/ui/hex/connection/stop_tests/readiness.rs": "1affb66b203a249c971286341d62d22e1b33b3ce745619949bae00e3208c6d81",
 
-  "src/ui/hex/settings.rs": "49a1c9d7e4d48a7c5f64b1711254f137c5b4c66de8104eb49bf273fa6142cd74",
+  "src/ui/hex/settings.rs": "cb7a3321410b78cacc37de359c5156534dd2eaf89bd8c912adc71ffe38c006d8",
 
   "src/ui/hex/setup.rs": "494e5d0651bff961f55877cadcd419e11f9e9b25221059e9520e458a52be2eb2",
 
@@ -429,7 +431,7 @@
 
   "src/ui/idle_cpu/measurement.rs": "e4be960feb8fd3fe5bef8d5d8e3c409aa8cf6e8d8fb77fccc0c4011777af7c2b",
 
-  "src/ui/live.rs": "8e19e60c008ffcdbacbf9a9b0f3713838c99c52ca43442ae81d57f7690e046c9",
+  "src/ui/live.rs": "901e555bde5d2fa934d94e3ece493fba3f27af81cc65c4cfb7280c41566ac822",
 
   "src/ui/mcp_connect.rs": "b7372660109d111f146b60c90b4a3387c66b2e9eebdc0332ac2bc07034cbba20",
 
@@ -437,7 +439,7 @@
 
   "src/ui/memory/settled.rs": "9d0915dfa235083870103a6872b2fc6e23c267328989d288b2299e1e0e460b58",
 
-  "src/ui/mod.rs": "428913128603686722fa49a3206251b778a39bad282e05585fd967051feb7e28",
+  "src/ui/mod.rs": "ac41de56d619af9100fdf32027b46ad94485c27483db2c79b295e92ca011de4e",
 
   "src/ui/models.rs": "607860762e895e69abcfe1e5a3686747db62be0c179248de8651e49df0482b6d",
 

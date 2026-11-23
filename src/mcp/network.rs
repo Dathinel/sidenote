@@ -107,6 +107,12 @@ async fn authorize(
 }
 impl Endpoint {
     pub(crate) fn bind(root: &std::path::Path) -> io::Result<Self> {
+        if matches!(crate::core::CHANNEL, crate::core::Channel::Stable) {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "External MCP is unavailable in Sidenote Stable.",
+            ));
+        }
         let args = std::env::args_os().collect::<Vec<_>>();
         let port = match args.iter().position(|a| a == "--mcp-port") {
             Some(index) => args

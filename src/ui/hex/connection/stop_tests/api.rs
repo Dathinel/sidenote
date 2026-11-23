@@ -14,6 +14,7 @@ pub(super) struct Data {
     pub omit_id: bool,
     pub meeting_state: Option<&'static str>,
     pub stop_changed: bool,
+    pub stop_state: Option<&'static str>,
     pub commands: Vec<String>,
     pub delay: Duration,
     pub stops: usize,
@@ -52,6 +53,7 @@ impl Fixture {
             omit_id: false,
             meeting_state: None,
             stop_changed: true,
+            stop_state: None,
             commands: Vec::new(),
             delay: Duration::ZERO,
             stops: 0,
@@ -134,7 +136,7 @@ impl Fixture {
                         let mut data = shared.lock().unwrap();
                         data.stops += 1;
                         data.id = None;
-                        data.meeting_state = None;
+                        data.meeting_state = data.stop_state;
                         serde_json::json!({"version":4,"status":"done","changed":data.stop_changed})
                     }
                     other => panic!("unexpected fake API command: {other}"),
@@ -196,6 +198,19 @@ impl Fixture {
                 .expect("Stop completion");
             if let Event::Hex(msg) = event {
                 state.hex_apply(msg);
+            }
+        }
+    }
+    pub fn stop_status(state: &mut State) {
+        let until = Instant::now() + Duration::from_secs(2);
+        loop {
+            let event = state
+                .events_rx
+                .recv_timeout(until.saturating_duration_since(Instant::now()))
+                .expect("Stop status");
+            if let Event::Hex(msg @ Msg::StopStatus(..)) = event {
+                state.hex_apply(msg);
+                return;
             }
         }
     }
