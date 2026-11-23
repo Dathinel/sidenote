@@ -958,8 +958,12 @@ pub fn section(s: &State, k: &Kit, p: Palette, part: Part) -> El {
     }
     if part == Part::Privacy {
         let sent = match (agent, scripts, automatic) {
-            (Some(_), _, true) => "When a meeting ends or you request a summary, Sidenote sends the transcript and your typed notes to your selected agent. Audio stays on this PC.",
-            (Some(_), _, false) => "When you request a summary, Sidenote sends the transcript and your typed notes to your selected agent. Audio stays on this PC.",
+            (Some(_), _, true) => {
+                "When a meeting ends or you request a summary, Sidenote sends the transcript and your typed notes to your selected agent. Audio stays on this PC."
+            }
+            (Some(_), _, false) => {
+                "When you request a summary, Sidenote sends the transcript and your typed notes to your selected agent. Audio stays on this PC."
+            }
             (_, true, _) => "Your configured script controls what is sent for meeting summaries.",
             _ => "Meeting summaries are off. Sidenote sends no meeting text for summaries.",
         };
