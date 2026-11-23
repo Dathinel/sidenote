@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Cheap adoption guard: reviewed call-site inventory plus mandatory Linux boundaries."""
+from bisect import bisect_right
 import hashlib
 import json
 from pathlib import Path
@@ -8,6 +9,23 @@ import sys
 
 SPAWN = re.compile(r"Command::new|(?:\.|::|\b)(?:spawn|exec[vl]?[ep]?|fork|vfork|posix_spawnp?|CreateProcessW)\s*\(|\.output\s*\(|\.status\s*\(")
 READ = re.compile(r"read_bounded|store_io::read|File::open|(?:std::)?fs::read(?:_to_string)?\s*\(|file_reads::(?:read|text|nofollow)|Snapshot::(?:capture|read_file|open_file)|shared_read\s*\(")
+
+
+def boundary_fingerprint(text):
+    matches = [match for pattern in (SPAWN, READ) for match in pattern.finditer(text)]
+    if not matches:
+        return None
+    line_starts = [0, *(newline.end() for newline in re.finditer("\n", text))]
+    matched_lines = set()
+    for match in matches:
+        first = bisect_right(line_starts, match.start()) - 1
+        end = bisect_right(line_starts, match.end() - 1)
+        matched_lines.update(range(first, end))
+    lines = text.split("\n")
+    # Keep whitespace inside lines because it can be part of a string literal.
+    normalized = sorted(lines[index].strip() for index in matched_lines)
+    payload = json.dumps([len(matches), normalized])
+    return "calls:" + hashlib.sha256(payload.encode()).hexdigest()
 
 
 def verify(root, overrides=None):
@@ -42,31 +60,49 @@ def verify(root, overrides=None):
         for path in (root / directory).rglob("*.rs"):
             name = path.relative_to(root).as_posix()
             text = source(name)
-            if SPAWN.search(text) or READ.search(text):
-                actual[name] = hashlib.sha256(text.encode()).hexdigest()
+            fingerprint = boundary_fingerprint(text)
+            if fingerprint is not None:
+                if name in expected and not expected[name].startswith("calls:"):
+                    fingerprint = hashlib.sha256(text.encode()).hexdigest()
+                actual[name] = fingerprint
     if actual != expected:
         stale = sorted(name for name in actual.keys() | expected.keys() if actual.get(name) != expected.get(name))
         raise AssertionError("stale boundary inventory: " + ", ".join(stale))
-    print("PASS Linux decoder disabled; meeting reads pinned; reviewed helper/reader inventory matches")
 
 
 def main():
     root = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).resolve().parents[1]
     verify(root)
+    print("PASS Linux decoder disabled; meeting reads pinned; reviewed helper/reader inventory matches")
     if "--self-test" in sys.argv:
+        runner = "src/core/runner_process.rs"
+        text = (root / runner).read_text(encoding="utf-8")
+        verify(root, {runner: text + "\n// Unrelated self-test edit.\n"})
+        print("PASS inventoried file accepts an unrelated edit")
+
+        stale_runner = f"stale boundary inventory: {runner}"
         mutations = [
-            ("crates/sidenote-sync/src/worker.rs", "anyhow::bail!(crate::RELAY_UNAVAILABLE)", "std::process::Command::new(\"escape\").spawn().unwrap(); anyhow::bail!(crate::RELAY_UNAVAILABLE)"),
-            ("src/core/notes/queue.rs", "inputs::Snapshot::read_file", "store_io::read_bounded"),
+            ("crates/sidenote-sync/src/worker.rs", "anyhow::bail!(crate::RELAY_UNAVAILABLE)",
+             'std::process::Command::new("escape").spawn().unwrap(); anyhow::bail!(crate::RELAY_UNAVAILABLE)',
+             "Linux decoder launch must be unavailable"),
+            ("src/core/notes/queue.rs", "inputs::Snapshot::read_file", "store_io::read_bounded",
+             "notes meeting reads must use Snapshot"),
+            (runner, "Command::new(program)", 'Command::new("fixture-program")', stale_runner),
+            (runner, "let started = Instant::now();",
+             "fixture.spawn\n        (); let started = Instant::now();", stale_runner),
+            (runner, "Command::new(program)", "fixture_command(program)", stale_runner),
         ]
-        for name, old, new in mutations:
+        for name, old, new, expected_error in mutations:
             text = (root / name).read_text(encoding="utf-8")
             assert old in text
             try:
                 verify(root, {name: text.replace(old, new, 1)})
-            except AssertionError:
-                continue
-            raise AssertionError("boundary guard accepted an injected bypass")
+            except AssertionError as error:
+                assert str(error) == expected_error, error
+            else:
+                raise AssertionError(f"boundary guard accepted an injected edit: {name}: {old}")
         print("PASS guard rejects an injected direct spawn and path-based meeting read")
+        print("PASS inventory rejects a changed, added (split across lines), or removed spawn match")
 
 
 if __name__ == "__main__":
