@@ -143,7 +143,9 @@ fn home_row(
         )
         .child(
             roles::META.line(
-                super::notes_status::list_label(s, m)
+                notes_job
+                    .as_ref()
+                    .and_then(super::notes_status::list_label)
                     .map(str::to_string)
                     .unwrap_or_else(|| people_line(m)),
                 if problem { p.ink } else { p.faint },
@@ -274,7 +276,7 @@ pub fn home(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
         .max_w(860.0)
         .px(side)
         .pt(if narrow { 8.0 } else { 20.0 })
-        .pb(s.overlay_h.get() + 32.0)
+        .pb(32.0)
         .child(
             row()
                 .w_full()
@@ -346,10 +348,9 @@ pub fn home(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
     if let Some(note) = &s.notice {
         pane = pane.child(notice_bar(note, p));
     }
-    pane.child(scroll(
-        col().w_full().items_center().child(doc),
-        "list-scroll",
-    ))
+    pane.child(
+        scroll(col().w_full().items_center().child(doc), "list-scroll").mb(s.overlay_h.get()),
+    )
     .child(ask::overlay(s, k, p, narrow, layer))
 }
 
@@ -411,4 +412,89 @@ fn short_recordings(s: &State, p: Palette, narrow: bool) -> El {
         col().w_full().items_center().child(doc),
         "list-scroll",
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fixture() -> Meeting {
+        Meeting::load(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tools/ui-fixtures/screens/meetings/1793955600000-1"),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn home_names_the_failed_step_beside_retry() {
+        crate::test_paths::isolate();
+        let mut state = State::new();
+        let meeting = fixture();
+        let action_key = format!("notes-list-action-{}", meeting.id);
+        let root = tempfile::tempdir().unwrap();
+        let jobs = root.path().join("local/notes-jobs");
+        std::fs::create_dir_all(&jobs).unwrap();
+        let record = jobs.join(format!("{}.json", meeting.id));
+        std::fs::write(&record, r#"{"state":"backend_error"}"#).unwrap();
+        state.meetings.push(meeting);
+        state.ai_notes.jobs = super::super::notes_status::read(root.path(), &state.meetings);
+        state.refresh_list();
+        let mut rt = rune::Runtime::new(
+            state,
+            super::super::view,
+            (390.0, 900.0),
+            rune::Env::default(),
+        );
+        rt.frame(0.0);
+        let elements = rt.elements();
+        assert!(
+            elements
+                .iter()
+                .any(|e| e.text.as_deref() == Some("Summary failed"))
+        );
+        assert!(elements.iter().any(|e| {
+            e.key.as_deref() == Some(action_key.as_str()) && e.label.as_deref() == Some("Try again")
+        }));
+    }
+
+    #[test]
+    fn home_last_row_scrolls_clear_of_ask() {
+        crate::test_paths::isolate();
+        let mut state = State::new();
+        let meeting = fixture();
+        state.meetings = (1..=40)
+            .map(|suffix| {
+                let mut meeting = meeting.clone();
+                meeting.id = format!("1793955600000-{suffix}");
+                meeting
+            })
+            .collect();
+        state.refresh_list();
+        let last = state.groups.last().unwrap().items.last().unwrap().index;
+        let last_key = format!("meeting-{}", state.meetings[last].id);
+        let mut rt = rune::Runtime::new(
+            state,
+            super::super::view,
+            (390.0, 900.0),
+            rune::Env::default(),
+        );
+        rt.frame(0.0);
+        rt.frame(0.016);
+        rt.update(|_, tx| tx.scroll_to_y("list-scroll", 10_000.0));
+        rt.frame(0.016);
+        let elements = rt.elements();
+        let rect = |key: &str| {
+            elements
+                .iter()
+                .find(|e| e.key.as_deref() == Some(key))
+                .unwrap()
+                .rect
+        };
+        let [_, list_top, _, list_height] = rect("list-scroll");
+        let [_, ask_top, _, _] = rect("ask-overlay");
+        let [_, last_top, _, last_height] = rect(&last_key);
+        assert!(list_top + list_height <= ask_top + 1.0);
+        assert!(last_top >= list_top && last_top + last_height <= list_top + list_height);
+    }
 }
