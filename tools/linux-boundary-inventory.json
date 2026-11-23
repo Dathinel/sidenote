@@ -217,7 +217,7 @@
   "src/ui/mcp_connect.rs": "b7372660109d111f146b60c90b4a3387c66b2e9eebdc0332ac2bc07034cbba20",
   "src/ui/memory.rs": "5e8f34ad55bbc46933d1f95721075d883d2a6a2345055051f46545a149db71ec",
   "src/ui/memory/settled.rs": "9d0915dfa235083870103a6872b2fc6e23c267328989d288b2299e1e0e460b58",
-  "src/ui/mod.rs": "5f53a81f01f53c47708dfbb80fab52979e61d03ef58ddffc260bcc908d9bcc7e",
+  "src/ui/mod.rs": "ee13ccf5ef5fb2be30b19350346ce03bff27a496f760369c743046973de13889",
   "src/ui/models.rs": "652e50da1b1d7c3e3f45b8da81879830e08b543a8bfb8f9832335cd2dd6ba169",
   "src/ui/notes_status.rs": "1c4aa1b193e81b3f68b3a1b2ddcf018ae992519ca540db1ee04db9358db706bf",
   "src/ui/project_merge.rs": "a0c33e2d9ad2754cc95fe3723cee82eea4a651ccd5357dfb9a5318873ed6707c",
