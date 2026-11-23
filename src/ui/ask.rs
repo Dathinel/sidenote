@@ -199,6 +199,8 @@ pub(super) fn focus_open(s: &State, tx: &mut Tx) -> bool {
     if open != s.ask_open {
         // Focus is reported by a later poll, after the input event that caused it.
         tx.animated();
+        // The dock and panel share a spring so the bottom edge stays anchored.
+        tx.motion(if open { GLIDE } else { GLIDE_EXIT });
     }
     open
 }
