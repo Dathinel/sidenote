@@ -606,7 +606,9 @@ fn failed_start_preserves_pending_notes_before_removal() {
 }
 
 fn no_id_stop(phase: &'static str) {
-    let (api, mut state, _) = Fixture::start();
+    use crate::ui::live::Phase;
+
+    let (api, mut state, now) = Fixture::start();
     {
         let mut data = api.data.lock().unwrap();
         data.omit_id = true;
@@ -621,14 +623,36 @@ fn no_id_stop(phase: &'static str) {
         data.delay = Duration::from_millis(1000);
     }
     Fixture::stop(&mut state);
-    let data = api.data.lock().unwrap();
-    assert_eq!(data.stops, 1, "no-ID {phase} must send exactly one Stop");
-    assert!(
-        data.commands
-            .starts_with(&["status".into(), "meeting-stop".into()])
-    );
-    assert_eq!(data.id, None);
+    {
+        let mut data = api.data.lock().unwrap();
+        assert_eq!(data.stops, 1, "no-ID {phase} must send exactly one Stop");
+        assert!(
+            data.commands
+                .starts_with(&["status".into(), "meeting-stop".into()])
+        );
+        assert_eq!(data.id, None);
+        data.delay = Duration::ZERO;
+    }
     assert!(state.hex.error.is_none());
+    assert_eq!(state.live.as_ref().unwrap().phase, Phase::Making);
+    state.hex_status_at(Err(HexError::Timeout), now + Duration::from_secs(11));
+    assert_eq!(state.live.as_ref().unwrap().phase, Phase::Making);
+
+    state.hex_check_settings();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let event = state
+            .events_rx
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .expect("Settings status after Stop");
+        if let Event::Hex(msg @ Msg::SettingsStatus(_)) = event {
+            state.hex_apply(msg);
+            break;
+        }
+    }
+    assert!(matches!(&state.hex.status, Some(Ok(status)) if status.meeting_state == "idle"));
+    assert!(!state.hex_recording());
+    assert_eq!(state.live.as_ref().unwrap().phase, Phase::Making);
 }
 
 #[test]
@@ -1069,6 +1093,15 @@ fn meeting_pause_resume_uses_hex_commands_and_keeps_one_meeting() {
         state.live.as_ref().unwrap().phase,
         crate::ui::live::Phase::Paused
     );
+    api.data.lock().unwrap().meeting_state = Some("transcribing");
+    let status = state.hex.engine.status_for_command().unwrap();
+    assert_eq!(status.meeting_state, "transcribing");
+    state.hex_apply(Msg::Status(Ok(status)));
+    assert_eq!(
+        state.live.as_ref().unwrap().phase,
+        crate::ui::live::Phase::Paused
+    );
+    api.data.lock().unwrap().meeting_state = None;
     assert!(
         !sidenote::core::state_dir()
             .join("local/notes-jobs")

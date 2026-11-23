@@ -24,6 +24,8 @@ pub struct Settings {
     lab_confirm: Option<String>,
     pub lab_error: Option<String>,
     jump_active: usize,
+    jump_requested: Option<usize>,
+    jump_origin: f32,
     jump_positions: BTreeMap<usize, f32>,
     jump_offset: std::rc::Rc<std::cell::Cell<f32>>,
     jump_max: std::rc::Rc<std::cell::Cell<f32>>,
@@ -235,6 +237,8 @@ pub(crate) fn navigate(s: &mut State, page: Page, tab: usize) {
     s.hex.shell.navigation_open = false;
     s.hex.shell.lab_confirm = None;
     s.hex.shell.jump_active = 0;
+    s.hex.shell.jump_requested = None;
+    s.hex.shell.jump_origin = 0.0;
     s.hex.shell.jump_positions.clear();
     s.hex.shell.jump_offset.set(0.0);
     s.hex.shell.jump_max.set(0.0);
@@ -309,26 +313,36 @@ pub fn tick(s: &mut State, _tx: &mut Tx) -> bool {
     }
     if s.on_hex() && !jump_groups(active(s).0, active(s).1).is_empty() {
         let offset = s.hex.shell.jump_offset.get();
-        let first = s.hex.shell.jump_positions.get(&0).copied().unwrap_or(0.0);
-        let selected =
-            if s.hex.shell.jump_max.get() > 0.0 && offset + 1.0 >= s.hex.shell.jump_max.get() {
-                s.hex
-                    .shell
-                    .jump_positions
-                    .keys()
-                    .next_back()
-                    .copied()
-                    .unwrap_or(0)
-            } else {
-                s.hex
-                    .shell
-                    .jump_positions
-                    .iter()
-                    .filter(|(_, y)| **y - first <= offset + 24.0)
-                    .map(|(i, _)| *i)
-                    .next_back()
-                    .unwrap_or(0)
-            };
+        let origin = s.hex.shell.jump_origin;
+        let max = s.hex.shell.jump_max.get();
+        let at_bottom = max > 0.0 && offset + 1.0 >= max;
+        // A clamped scroll can leave several headings visible. Keep the clicked section selected.
+        let requested = s
+            .hex
+            .shell
+            .jump_requested
+            .filter(|_| s.pending_scroll.is_some() || max <= 0.0 || at_bottom);
+        s.hex.shell.jump_requested = requested;
+        let selected = if let Some(requested) = requested {
+            requested
+        } else if at_bottom {
+            s.hex
+                .shell
+                .jump_positions
+                .keys()
+                .next_back()
+                .copied()
+                .unwrap_or(0)
+        } else {
+            s.hex
+                .shell
+                .jump_positions
+                .iter()
+                .filter(|(_, y)| **y - origin <= offset + 24.0)
+                .map(|(i, _)| *i)
+                .next_back()
+                .unwrap_or(0)
+        };
         if selected != s.hex.shell.jump_active {
             s.hex.shell.jump_active = selected;
             changed = true;
@@ -1567,6 +1581,8 @@ pub(in crate::ui) fn tab_bar(
             .label(*name)
             .on_press(move |s: &mut State| {
                 if jumps {
+                    s.hex.shell.jump_requested = Some(tab);
+                    s.hex.shell.jump_active = tab;
                     if page == Page::Hex && (4..=5).contains(&tab) {
                         s.hex.open_groups.insert(if tab == 4 {
                             "hex-compatibility"
@@ -2810,8 +2826,17 @@ pub fn pane(s: &State, k: &Kit, p: Palette, _narrow: bool, layer: &mut Vec<El>) 
     let gutter = if narrow { 16.0 } else { 40.0 };
     let pane_width = PAGE_COLUMN + 2.0 * gutter;
     let drawer = drawer_open(s);
+    let hex_unavailable = page == Page::Hex && !s.hex.running();
+    let page_note = s.hex.page_note().map(|reason| {
+        if reason == super::connection::UNKNOWN {
+            "Could not confirm Hex recording status. Checking again automatically."
+        } else {
+            reason
+        }
+    });
     let mut doc = col()
         .key("hex-top")
+        .on_layout(|s: &mut State, rect| s.hex.shell.jump_origin = rect[1])
         .w_full()
         .max_w(pane_width)
         .px(gutter)
@@ -2823,29 +2848,36 @@ pub fn pane(s: &State, k: &Kit, p: Palette, _narrow: bool, layer: &mut Vec<El>) 
     if let Some(setup) = setup {
         doc = doc.child(setup);
     }
-    if s.hex.settings_status_pending {
+    if page == Page::Hex
+        && let Some(status) = s.hex.state()
+        && let sidenote::hex_install::Installation::Installed { version, .. } = &s.hex.installation
+        && version != &status.version
+    {
+        doc = doc.child(
+            roles::SMALL
+                .wrap(
+                    format!("Hex will update to {version} when it restarts."),
+                    p.soft,
+                )
+                .key("hex-pending-update"),
+        );
+    }
+    if s.hex.settings_status_pending && !hex_unavailable {
         doc = doc.child(
             roles::SMALL
                 .wrap("Checking Hex...", p.soft)
                 .role("status")
                 .key("settings-hex-check"),
         );
-    } else if let Some(note_) = s
-        .hex
-        .page_note()
-        .filter(|_| matches!(page, Page::Hex | Page::Appearance | Page::Meetings))
+    } else if let Some(note_) = page_note
+        .filter(|_| {
+            !hex_unavailable && matches!(page, Page::Hex | Page::Appearance | Page::Meetings)
+        })
         .filter(|_| {
             !has_setup || !matches!(s.hex.status, None | Some(Err(HexError::HexNotRunning)))
         })
     {
-        doc = doc.child(note(
-            if note_ == super::connection::UNKNOWN {
-                "Could not confirm Hex recording status. Checking again automatically."
-            } else {
-                note_
-            },
-            p,
-        ));
+        doc = doc.child(note(note_, p));
     }
     if let Some(problem) = s.hex.settings_note {
         doc = doc.child(note(problem, p));
@@ -2856,7 +2888,7 @@ pub fn pane(s: &State, k: &Kit, p: Palette, _narrow: bool, layer: &mut Vec<El>) 
         doc = doc.child(roles::SMALL.wrap(problem, p.warn).role("alert"));
     }
     // The section controls above always need their sections, so the body shows in every state.
-    // Its controls stay disabled and the notes above say why while Hex is not confirmed.
+    // Its controls stay disabled and the header says why while Hex is unconfirmed.
     doc = doc.child(body(s, k, p, layer, page, tab));
     if drawer {
         layer.push(rune_kit::scrim("settings-scrim", close_drawer).fill(p.scrim));
@@ -2950,6 +2982,18 @@ pub fn pane(s: &State, k: &Kit, p: Palette, _narrow: bool, layer: &mut Vec<El>) 
                         (!jump_groups(page, tab).is_empty())
                             .then(|| tab_bar(s, p, true, page, tab)),
                     )
+                    .children(hex_unavailable.then(|| {
+                        let reason = if s.hex.settings_status_pending {
+                            "Checking Hex."
+                        } else {
+                            page_note.unwrap_or("Checking Hex.")
+                        };
+                        roles::SMALL
+                            .wrap(reason, p.soft)
+                            .role("status")
+                            .key("hex-unavailable-reason")
+                            .mt(8.0)
+                    }))
                     .pb(4.0),
             ),
         )

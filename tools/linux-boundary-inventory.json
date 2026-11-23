@@ -269,13 +269,13 @@
 
   "src/core/recording_source/tests.rs": "f599f85ce6e360ba9ee314037e8f7036c9de16939d02cee773662730c9b84f84",
 
-  "src/core/relay_preview.rs": "71e028f0d14b8df40333b2ac5bfbceaf6e7885cfd74a9cf43d34dcb0686881ef",
+  "src/core/relay_preview.rs": "6bd8a988f834b9b6079cc9a88ecdbe27daf08d82389c1361080220e309096458",
 
   "src/core/relay_preview/migration.rs": "e9e0e4c86be43027861825ba387c26ca70a9f8567964de61c9113e2e79a8559f",
 
   "src/core/relay_preview/operations.rs": "9dcd718a190ba735d59805a466b49bce3554661cfe66b6495900db9b10ea29ba",
 
-  "src/core/relay_preview/pairing.rs": "936be0f1d1d986656bf06979a1aa18572877a7de903d4cf8a9cd8115bf98092f",
+  "src/core/relay_preview/pairing.rs": "3a234b69c8441c987a06ce7ff727076f4443f8b25d4006d087480989d36753fb",
 
   "src/core/relay_preview/shared.rs": "373e85ff8212a7cc4477c311aefb04c597837df07b6c9ec996270bda73d80bd8",
 
@@ -415,13 +415,13 @@
 
   "src/ui/hex.rs": "569bd92ae949ef590033ec7e4122ba3cf2487742eebfe64403aa1eab375c4036",
 
-  "src/ui/hex/connection/stop_tests.rs": "5dcc96cab3be2f3ec42a93c140b6144500a151e47b2ac1d85d6bc38235911c44",
+  "src/ui/hex/connection/stop_tests.rs": "fd6214e09f6c3fed6acde325e77af3e21c3d2409dfd90e54210dc8a5f547941e",
 
   "src/ui/hex/connection/stop_tests/api.rs": "249e5ba679241506285eb27864920f89940ad44d599167bc543ff91b736ef175",
 
   "src/ui/hex/connection/stop_tests/readiness.rs": "1affb66b203a249c971286341d62d22e1b33b3ce745619949bae00e3208c6d81",
 
-  "src/ui/hex/settings.rs": "0ee9a7b60963e1d648adc4aea6b355fd3d1fa62cba6626e87587b0177ecad54a",
+  "src/ui/hex/settings.rs": "49a1c9d7e4d48a7c5f64b1711254f137c5b4c66de8104eb49bf273fa6142cd74",
 
   "src/ui/hex/setup.rs": "494e5d0651bff961f55877cadcd419e11f9e9b25221059e9520e458a52be2eb2",
 
@@ -429,7 +429,7 @@
 
   "src/ui/idle_cpu/measurement.rs": "e4be960feb8fd3fe5bef8d5d8e3c409aa8cf6e8d8fb77fccc0c4011777af7c2b",
 
-  "src/ui/live.rs": "d29d3dd94154c063b891aee39006f98278018e5c553f188f876982fa15bfcab3",
+  "src/ui/live.rs": "8e19e60c008ffcdbacbf9a9b0f3713838c99c52ca43442ae81d57f7690e046c9",
 
   "src/ui/mcp_connect.rs": "b7372660109d111f146b60c90b4a3387c66b2e9eebdc0332ac2bc07034cbba20",
 

@@ -313,6 +313,7 @@ mod security_tests {
             if category == "os:32:read session relay settings.json")
         );
         for label in [
+            "check replica database compatibility",
             "read active group replica database",
             "merge membership replica database",
             "publish capabilities replica database",
@@ -381,6 +382,70 @@ mod security_tests {
         .unwrap();
         assert!(!confirmation_reply(42, &mut replies).await.unwrap());
     }
+    #[test]
+    #[cfg(windows)]
+    fn devices_releases_mode_lock_while_loading_tasks() -> anyhow::Result<()> {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        let fixture = tempfile::tempdir()?;
+        let root = fixture.path();
+        DeviceSettings::set_name_in(root, "Synthetic device")?;
+        Settings {
+            enabled: true,
+            address: String::new(),
+            ..Default::default()
+        }
+        .save(root)?;
+        let _preview = get(root)?.unwrap();
+        let (entered, waiting) = mpsc::channel();
+        let (resume, released) = mpsc::channel();
+        let path = root.to_owned();
+        let worker = thread::spawn(move || {
+            DEVICES_TASKS_LOAD.with(|hook| {
+                *hook.borrow_mut() = Some(Box::new(move || {
+                    entered.send(()).unwrap();
+                    released.recv_timeout(Duration::from_secs(2)).unwrap();
+                }));
+            });
+            devices(&path)
+        });
+        // This hook runs with Store held after the mode-protected snapshot.
+        let mode = waiting.recv_timeout(Duration::from_secs(2)).map(|()| {
+            std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .share_mode(0)
+                .open(root.join("local/relay/mode.lock"))
+        });
+        let _ = resume.send(());
+        let devices = worker.join();
+        disconnect(root)?;
+        let _mode = mode??;
+        assert!(
+            devices
+                .expect("devices thread panicked")?
+                .iter()
+                .any(|device| device.local && device.name == "Synthetic device")
+        );
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn disabled_authority_save_reports_the_settings_operation() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let device = Device::open(&root.path().join("replica.sqlite"))?;
+        let error = Settings::default()
+            .save_authority(root.path(), &device)
+            .unwrap_err();
+        assert!(matches!(
+            failure("adopt", &error),
+            Update::Failed { stage: "adopt", category }
+                if category == "io:InvalidData:read authority settings.json"
+        ));
+        Ok(())
+    }
+
     #[test]
     #[cfg(windows)]
     fn a_renamed_device_shows_its_new_name_and_a_bad_name_changes_nothing() -> anyhow::Result<()> {
@@ -592,18 +657,35 @@ pub struct PairedDevice {
     pub presence: Presence,
 }
 
+#[cfg(all(test, windows))]
+thread_local! {
+    static DEVICES_TASKS_LOAD: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
+}
+
 pub fn devices(root: &Path) -> io::Result<Vec<PairedDevice>> {
     let Some(preview) = get(root)? else {
         return Ok(Vec::new());
     };
-    let _mode = store_io::lock(&root.join("local/relay/mode.lock"))?;
-    let settings = Settings::load(root)?;
-    let group = preview
-        .device
-        .store(|s| Group::load(s, &settings.room))
-        .map_err(failed)?;
+    let (settings, group) = {
+        let _mode = store_io::lock(&root.join("local/relay/mode.lock"))?;
+        let settings = Settings::load(root)?;
+        let group = preview
+            .device
+            .store(|s| Group::load(s, &settings.room))
+            .map_err(failed)?;
+        (settings, group)
+    };
     let local_name = super::super::DeviceSettings::read_in(root)?.name;
-    let document = preview.device.load("tasks").map_err(failed)?;
+    let document = preview
+        .device
+        .store(|s| {
+            #[cfg(all(test, windows))]
+            if let Some(hook) = DEVICES_TASKS_LOAD.with(|hook| hook.borrow_mut().take()) {
+                hook();
+            }
+            s.load("tasks")
+        })
+        .map_err(failed)?;
     let presence = preview.presence();
     Ok(group
         .members()
@@ -641,11 +723,13 @@ impl Preview {
         self.online(false).context(Operation("stop sync session"))?;
         self.device
             .store(|s| s.check_compatible())
-            .map_err(failed)?;
+            .map_err(failed)
+            .context(Operation("check replica database compatibility"))?;
         let mut settings =
             Settings::load(&self.root).context(Operation("read relay settings.json"))?;
         if !settings.enabled {
-            return Err(store_io::invalid("Relay preview was turned off").into());
+            return Err(store_io::invalid("Relay preview was turned off"))
+                .context(Operation("read relay settings.json"));
         }
         self.device
             .store(|s| s.check_group_active(&group.room()))
