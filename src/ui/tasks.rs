@@ -963,6 +963,11 @@ impl State {
             .meetings
             .iter()
             .find(|m| m.id == id)
+            // A snapshot can keep the draft visible without authorizing a write.
+            .filter(|_| {
+                self.live_panel_task()
+                    .is_some_and(|task| task.meeting_id == id && task.index == index)
+            })
             .map(|m| m.folder.clone());
         // The open task can move in the summary without starting a new editor session.
         self.tasks.panel = Some(Panel::Task((id.into(), index)));
@@ -1294,19 +1299,32 @@ impl State {
         t.panel = Some(Panel::Add);
     }
 
-    /// The panel's open task, if it still exists.
-    fn panel_task(&self) -> Option<&TaskItem> {
-        match &self.tasks.panel {
-            Some(Panel::Task((id, i))) => {
-                let Some(opened) = &self.tasks.edit_item else {
-                    return self.tasks.item(id, *i);
-                };
-                let mut key = tick_key(opened);
-                key.2 = *i;
-                self.tasks.task_by_key(&key)
-            }
-            _ => None,
+    fn live_panel_task(&self) -> Option<&TaskItem> {
+        let Some(Panel::Task((id, index))) = &self.tasks.panel else {
+            return None;
+        };
+        let Some(opened) = &self.tasks.edit_item else {
+            return self.tasks.item(id, *index);
+        };
+        if opened.meeting_id != *id {
+            return None;
         }
+        let mut key = tick_key(opened);
+        key.2 = *index;
+        self.tasks.task_by_key(&key)
+    }
+
+    /// Keep the opened task's draft when its row has disappeared.
+    fn panel_task(&self) -> Option<&TaskItem> {
+        self.live_panel_task().or_else(|| {
+            let Some(Panel::Task((id, _))) = &self.tasks.panel else {
+                return None;
+            };
+            self.tasks
+                .edit_item
+                .as_ref()
+                .filter(|task| task.meeting_id == *id)
+        })
     }
 
     /// Save display fields without changing the original identity text.
@@ -3370,6 +3388,10 @@ fn task_panel(s: &State, k: &Kit, t: &TaskItem, p: Palette, layer: &mut Vec<El>)
                     }),
                 )
         }));
+    // The draft still has Save and Cancel. Row actions require the live task.
+    if s.live_panel_task().is_none() {
+        return (body, el());
+    }
     body = body.child(detail_property(
         "Status",
         &super::icons::CIRCLE,
@@ -4582,6 +4604,42 @@ mod tests {
             rt.state.tasks.item(MEETING, 0).unwrap().status,
             core::TaskStatus::Todo
         );
+    }
+
+    #[test]
+    fn closing_a_removed_tasks_panel_keeps_its_title_draft() {
+        let root = tempfile::tempdir().unwrap();
+        let mut rt = stored_tasks_page(root.path());
+        tap_task_control(&mut rt, &format!("ttask-{MEETING}-0"));
+        tap_task_control(&mut rt, "ptitle");
+        rt.update(|s, _| {
+            s.tasks.inputs.title = TextEdit::new("Gather the first batch");
+            let meeting = &mut s.meetings[0];
+            let removed = meeting.summary.todo.remove(0);
+            meeting.summary.todo[0].task = removed.task;
+            fs::write(
+                meeting.folder.join("english-summary.json"),
+                serde_json::to_vec(&meeting.summary).unwrap(),
+            )
+            .unwrap();
+            s.rebuild_tasks();
+        });
+        drain_task_updates(&mut rt);
+        rt.update(|s, _| assert!(!s.close_panel()));
+        drain_task_updates(&mut rt);
+
+        assert_eq!(rt.state.tasks.inputs.title.text, "Gather the first batch");
+        assert_eq!(rt.state.panel_task().unwrap().stable_id, "first");
+        assert!(rt.state.tasks.edit_failed);
+        assert_eq!(
+            rt.state.tasks.notice.as_deref(),
+            Some(SaveError::Moved.message())
+        );
+        assert!(rt.find("tasks-notice-dismiss").is_some());
+        assert!(rt.find("task-text-save").is_some());
+        assert!(rt.find("pdone").is_none());
+        let overrides = rt.state.tasks.store.load_overrides().unwrap();
+        assert!(!overrides.tasks.contains_key(MEETING));
     }
 
     #[test]
