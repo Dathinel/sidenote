@@ -1041,6 +1041,8 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
                         row()
                             .w_full()
                             .items_center()
+                            .flex_wrap()
+                            .gaps(4.0, 0.0)
                             .justify_between()
                             .child(control)
                             .child(
@@ -1166,14 +1168,33 @@ pub fn scene_publication(s: &mut State, home: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::{theme, view};
+    use crate::ui::{live, theme, view};
     use rune::{Env, Runtime, text::TextSystem};
+    use sidenote::core::meeting_parts;
 
     fn element(rt: &Runtime<State>, key: &str) -> rune::ElementInfo {
         rt.elements()
             .into_iter()
             .find(|element| element.key.as_deref() == Some(key))
             .unwrap_or_else(|| panic!("missing {key}"))
+    }
+
+    fn reading_page(id: &str, width: f32, session: Option<live::Live>) -> Runtime<State> {
+        let mut state = State::new();
+        state.meeting_ui.tabs = false;
+        state.selected = Some(id.into());
+        state.live = session;
+        state.load_saved();
+        let mut rt = Runtime::with_text(
+            state,
+            view,
+            (width, 600.0),
+            Env::default(),
+            TextSystem::new(theme::fonts(), (theme::SANS, "Inter")),
+        );
+        rt.settle_all();
+        rt.frame(0.0);
+        rt
     }
 
     #[test]
@@ -1192,19 +1213,7 @@ mod tests {
         std::fs::write(folder.join("notes.md"), notes).unwrap();
 
         for width in [390.0, 1334.0] {
-            let mut state = State::new();
-            state.meeting_ui.tabs = false;
-            state.selected = Some(ID.into());
-            state.load_saved();
-            let mut rt = Runtime::with_text(
-                state,
-                view,
-                (width, 600.0),
-                Env::default(),
-                TextSystem::new(theme::fonts(), (theme::SANS, "Inter")),
-            );
-            rt.settle_all();
-            rt.frame(0.0);
+            let mut rt = reading_page(ID, width, None);
             assert_eq!(element(&rt, "segment0").label.as_deref(), Some("Summary"));
             assert_eq!(
                 element(&rt, "segment1").label.as_deref(),
@@ -1248,6 +1257,55 @@ mod tests {
             rt.frame(0.0);
             assert!(!rt.state.transcript_open);
             assert!(element(&rt, "meeting-transcript").focused);
+        }
+    }
+
+    #[test]
+    fn paused_meeting_transcript_controls_fit_a_narrow_sheet() {
+        const ID: &str = "1800000000143-998";
+        crate::test_paths::isolate();
+        let folder = core::meetings_dir().join(ID);
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(
+            folder.join("english-summary.json"),
+            r#"{"title":"Paused launch review","context":["Check the launch date."]}"#,
+        )
+        .unwrap();
+
+        for width in [360.0, 390.0] {
+            let mut live = live::Live::scene(live::Phase::Paused, None);
+            live.session = Some(meeting_parts::Meeting {
+                id: ID.into(),
+                phase: meeting_parts::Phase::Paused,
+                parts: vec![meeting_parts::Part {
+                    id: ID.into(),
+                    started_ms: 1_800_000_000_143,
+                    duration_ms: 60_000,
+                }],
+                ..Default::default()
+            });
+            let mut rt = reading_page(ID, width, Some(live));
+            rt.update(|s, _| s.toggle_transcript());
+            rt.settle_all();
+            rt.frame(0.0);
+
+            let [left, top, w, h] = element(&rt, "meeting-transcript-surface").rect;
+            for key in [
+                "meeting-transcript",
+                "meeting-resume",
+                "meeting-generate",
+                "meeting-hide-transcript",
+            ] {
+                let [x, y, button_w, button_h] = element(&rt, key).rect;
+                assert!(x >= left && x + button_w <= left + w, "{key} at {width}");
+                assert!(y >= top && y + button_h <= top + h, "{key} at {width}");
+            }
+            let [hide_x, hide_y, ..] = element(&rt, "meeting-hide-transcript").rect;
+            let [x, y, w, h] = element(&rt, "meeting-recording-control").rect;
+            assert!(
+                hide_x >= x + w || hide_y >= y + h,
+                "Hide overlaps at {width}"
+            );
         }
     }
 }
