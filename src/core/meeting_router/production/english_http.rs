@@ -66,6 +66,11 @@ impl RunHex {
                 service.abort()
             }
             .into();
+            #[cfg(test)]
+            if !graceful && self.state["service_reaped"] == true {
+                super::super::hex_http::HTTP_PHASES
+                    .with_borrow_mut(|phases| phases.aborted = Some(Instant::now()));
+            }
             self.state["service_close_seconds"] = started.elapsed().as_secs_f64().into();
             self.cleanup(if graceful {
                 "english-batch-finished"
@@ -176,8 +181,12 @@ impl HexCommand for RunHex {
             }
         }
         let remaining = || {
+            let now = Instant::now();
+            #[cfg(test)]
+            super::super::hex_http::HTTP_PHASES
+                .with_borrow_mut(|phases| phases.request_budget = Some((now, deadline)));
             deadline
-                .checked_duration_since(Instant::now())
+                .checked_duration_since(now)
                 .ok_or(HexFailure::Timeout)
         };
         if let Some(service) = &mut self.service {

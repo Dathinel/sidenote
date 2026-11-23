@@ -17,6 +17,20 @@ use std::{
 };
 use zeroize::{Zeroize, Zeroizing};
 
+#[cfg(test)]
+#[derive(Default)]
+pub(super) struct HttpPhases {
+    pub request_budget: Option<(Instant, Instant)>,
+    pub request_io: Option<(Instant, Instant)>,
+    pub aborted: Option<Instant>,
+    pub batches_done: Option<Instant>,
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(super) static HTTP_PHASES: std::cell::RefCell<HttpPhases> = std::cell::RefCell::default();
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Endpoint {
@@ -142,11 +156,17 @@ impl Service {
         .map_err(|_| "service-auth")?;
         authorization.set_sensitive(true);
         let watch = OwnerWatch::start(hex, &self.job);
+        #[cfg(test)]
+        let request_started = Instant::now();
         let response = agent
             .post(url.as_str())
             .header("Authorization", authorization)
             .header("Content-Type", "audio/wav")
             .send(&audio);
+        #[cfg(test)]
+        HTTP_PHASES.with_borrow_mut(|phases| {
+            phases.request_io = Some((request_started, Instant::now()));
+        });
         let result = (|| {
             let mut response = response.map_err(|_| "service-request")?;
             let status = response.status().as_u16();
