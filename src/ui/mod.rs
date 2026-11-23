@@ -476,7 +476,7 @@ impl State {
             relay_ui: relay::RelayUi::default(),
             button_sheet: false,
             row_sheet: false,
-            annotations: annotations::Annotations::default(),
+            annotations: annotations::Annotations::default().with_view(prefs.annotations_view),
             meeting_ui: meeting::ReadingUi::new(&store.root, &prefs),
             people,
             companies,
@@ -2024,7 +2024,7 @@ fn on_key(s: &mut State, e: &KeyEvent, tx: &mut Tx) -> bool {
         return hex::on_key(s, e, tx);
     }
     if s.annotations.open {
-        return annotations::on_key(s, e);
+        return annotations::on_key(s, e, tx);
     }
     if tasks_view {
         return tasks::on_key(s, e, tx);
