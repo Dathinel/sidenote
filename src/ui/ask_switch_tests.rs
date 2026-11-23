@@ -2456,27 +2456,30 @@ fn deletion_cancels_delayed_ask_text_and_answers_in_all_scopes() {
         memory::MemoryStore,
     };
 
-    let mut rt = page();
+    let mut rt = page_with(DEFAULT_SIZE, || {
+        let root = core::state_dir();
+        let mut prefs = core::UiPrefs::default();
+        core::people::initialize(&mut prefs, &[]);
+        prefs.save(&root).unwrap();
+        let manifest =
+            serde_json::json!({"status":"complete","created_at_ms":prefs.people_since_ms});
+        let folder = core::meetings_dir().join(MEETING);
+        std::fs::write(folder.join("manifest.json"), manifest.to_string()).unwrap();
+        core::companies::Companies::save_company(
+            &root,
+            core::companies::Company {
+                id: "fixture".into(),
+                name: "Synthetic company".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        core::companies::Companies::link(&root, "Synthetic Person", Some("fixture".into()), None)
+            .unwrap();
+    });
     let state = &mut rt.state;
-    let folder = core::meetings_dir().join(MEETING);
-    std::fs::write(folder.join("manifest.json"), br#"{"status":"complete"}"#).unwrap();
     let store = Storage::new(&core::meetings_dir(), &state.store.root).unwrap();
     state.meetings[0].summary.people = vec!["Synthetic Person".into()];
-    state.companies.data.catalog.records.insert(
-        "fixture".into(),
-        core::companies::Company {
-            id: "fixture".into(),
-            name: "Synthetic company".into(),
-            ..Default::default()
-        },
-    );
-    state.companies.data.catalog.people.insert(
-        core::people::key("Synthetic Person"),
-        core::companies::PersonLink {
-            company_id: Some("fixture".into()),
-            ..Default::default()
-        },
-    );
     let memory = MemoryStore::new(state.store.root.clone());
     let preview = memory.preview_migration().unwrap();
     memory
@@ -2501,7 +2504,7 @@ fn deletion_cancels_delayed_ask_text_and_answers_in_all_scopes() {
         state.companies.selected = (scope == 2).then(|| "fixture".to_owned());
         let id = state.ask_key();
         let context = state.all_context(&Default::default()).text;
-        assert!(context.contains(CONTEXT));
+        assert!(context.contains(CONTEXT), "scope {scope}");
         if state.memory_open {
             assert!(context.contains(MEMORY));
         }
@@ -2548,18 +2551,15 @@ fn deletion_cancels_delayed_ask_text_and_answers_in_all_scopes() {
                 _ => panic!("unexpected deletion result"),
             };
             assert_ne!(core::mutation_generation(), prior);
-            state.apply_event(Event::Progress {
+            let progress = |event| Event::Progress {
                 id: id.clone(),
                 generation: 0,
-                event: first,
-            });
+                event,
+            };
+            state.apply_event(progress(first));
             assert!(cancel.stopped());
             assert!(!state.asks.contains_key(&id));
-            state.apply_event(Event::Progress {
-                id: id.clone(),
-                generation: 0,
-                event: AskProgress::Finished,
-            });
+            state.apply_event(progress(AskProgress::Finished));
             assert!(state.store.load(&id).unwrap().messages.is_empty());
             let suppressed = suppressed_ids(&state.store.root).unwrap();
             assert!(suppressed.contains(MEETING));
