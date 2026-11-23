@@ -358,7 +358,18 @@ impl State {
             self.start_edit(job);
         }
     }
+    pub(super) fn save_blocks_task_navigation(&self) -> bool {
+        self.edit_busy
+            && (!self.tasks.list_tick_running
+                || self
+                    .edit_queue
+                    .waiting
+                    .iter()
+                    .any(|job| !matches!(job, Job::ListTick { .. })))
+    }
+
     fn start_edit(&mut self, job: Job) {
+        self.tasks.list_tick_running = matches!(&job, Job::ListTick { .. });
         let mut guard = Guard {
             target: Some(job.target()),
             events: self.events_tx.clone(),
@@ -521,6 +532,7 @@ impl State {
     }
     pub(super) fn edit_finished(&mut self, completion: Completion) {
         self.edit_busy = false;
+        self.tasks.list_tick_running = false;
         self.apply_completion(completion);
         if let Some(next) = self.edit_queue.finish() {
             self.edit_busy = true;

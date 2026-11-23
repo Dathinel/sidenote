@@ -136,6 +136,7 @@ pub struct TasksState {
     pub checked: HashMap<String, BTreeSet<String>>,
     list_ticks: HashMap<TickKey, TickWrite>,
     tick_sequence: u64,
+    pub(super) list_tick_running: bool,
     /// Every task, cleared or not. Meeting views and Ask read this one.
     pub all: Vec<TaskItem>,
     /// The tasks the page lists: `all` without the cleared ones, unless `show_cleared`.
@@ -272,6 +273,7 @@ impl TasksState {
             checked: HashMap::new(),
             list_ticks: HashMap::new(),
             tick_sequence: 0,
+            list_tick_running: false,
             all: Vec::new(),
             items: Vec::new(),
             names: Vec::new(),
@@ -1083,7 +1085,7 @@ impl State {
     }
 
     fn has_task_draft(&self) -> bool {
-        self.edit_busy
+        self.save_blocks_task_navigation()
             || self.tasks.edit_failed
             || (matches!(self.tasks.panel, Some(Panel::Task(_)))
                 && (!self.tasks.inputs.owner.text.is_empty()
@@ -4158,6 +4160,8 @@ mod tests {
         tap_task_control(&mut rt, &format!("ttick-{MEETING}-0"));
         rt.update(|s, _| {
             s.meetings[0].summary.todo.swap(0, 1);
+            assert!(s.edit_busy);
+            assert!(s.tasks.item(MANUAL_ROW, 0).is_some());
             assert!(s.open_task(MANUAL_ROW, 0));
             s.rebuild_tasks();
         });
