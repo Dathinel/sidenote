@@ -33,6 +33,30 @@ pub fn draw(icon: &'static Icon, size: f32, ink: Color) -> El {
     rune::icon(icon, size).color(ink)
 }
 
+// Kit selects paint into a 16-point icon box. Scale the glyph around its centre.
+macro_rules! select_chevron {
+    ($entry:ident, $base:ident, $name:literal) => {
+        pub static $entry: LazyLock<Icon> = LazyLock::new(|| {
+            static BODY: LazyLock<String> = LazyLock::new(|| {
+                let scale = INLINE / ROW;
+                let offset = $base.view * (1.0 - scale) / 2.0;
+                format!(
+                    "<g transform=\"translate({offset} {offset}) scale({scale})\">{}</g>",
+                    $base.body
+                )
+            });
+            Icon {
+                name: $name,
+                view: $base.view,
+                body: BODY.as_str(),
+            }
+        });
+    };
+}
+
+select_chevron!(SELECT_DOWN, CHEVRON_DOWN, "settings-chevron-down");
+select_chevron!(SELECT_UP, CHEVRON_UP, "settings-chevron-up");
+
 // Embedded entries
 lucide!(
     MEETINGS,
@@ -620,7 +644,7 @@ pub fn styled(value: impl Into<String>, style: rune::TextStyle, ink: Color) -> E
         "i" => Some(&*INFO),
         _ => None,
     } {
-        return draw(icon, 16.0, ink);
+        return draw(icon, INLINE, ink);
     }
     if !value.chars().any(|ch| glyph(ch).is_some()) {
         return rune::text(value).font(style).color(ink).wrap();
@@ -638,7 +662,7 @@ pub fn styled(value: impl Into<String>, style: rune::TextStyle, ink: Color) -> E
                 );
             }
             word.clear();
-            line = line.child(draw(icon, 16.0, ink));
+            line = line.child(draw(icon, INLINE, ink));
         } else {
             word.push(ch);
         }

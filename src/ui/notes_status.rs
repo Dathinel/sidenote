@@ -211,10 +211,18 @@ pub fn job(s: &State, m: &Meeting) -> Option<Job> {
             job
         })
 }
-pub fn list_label(s: &State, m: &Meeting) -> Option<&'static str> {
-    let job = job(s, m)?;
+pub fn list_label(job: &Job) -> Option<&'static str> {
     match job.state {
-        JobState::Done { .. } => visible_copy(&job, None, false).map(|(title, _)| title),
+        JobState::Done { .. } => visible_copy(job, None, false).map(|(title, _)| title),
+        JobState::BackendError { next_try_ms, .. } => {
+            let tasks = matches!(job.request, Some(Request::SortAgain | Request::RedoTasks));
+            Some(match (tasks, next_try_ms.is_some()) {
+                (true, true) => "Task retry scheduled",
+                (true, false) => "Task sorting failed",
+                (false, true) => "Summary retry scheduled",
+                (false, false) => "Summary failed",
+            })
+        }
         _ => Some(label(&job.state)),
     }
 }

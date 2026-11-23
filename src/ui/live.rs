@@ -20,6 +20,7 @@ use std::{
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
+        mpsc,
     },
     thread,
     time::{Duration, Instant},
@@ -27,24 +28,57 @@ use std::{
 
 type Work = Box<dyn FnOnce() + Send>;
 pub(super) struct NoteWriter {
-    tx: std::sync::mpsc::Sender<Work>,
-    thread: thread::JoinHandle<()>,
+    tx: mpsc::Sender<Work>,
+    stopped: Arc<AtomicBool>,
 }
+
+struct WriterExit {
+    stopped: Arc<AtomicBool>,
+    wake: Option<super::Waker>,
+}
+
+impl Drop for WriterExit {
+    fn drop(&mut self) {
+        self.stopped.store(true, Ordering::Release);
+        if thread::panicking()
+            && let Some(wake) = &self.wake
+        {
+            wake();
+        }
+    }
+}
+
 impl NoteWriter {
-    fn new() -> std::io::Result<Self> {
-        let (tx, rx) = std::sync::mpsc::channel::<Work>();
-        let thread = thread::Builder::new()
+    fn new(wake: Option<super::Waker>) -> std::io::Result<Self> {
+        let (tx, rx) = mpsc::channel::<Work>();
+        let stopped = Arc::new(AtomicBool::new(false));
+        let exit = WriterExit {
+            stopped: stopped.clone(),
+            wake,
+        };
+        thread::Builder::new()
             .name("live-notes".into())
             .spawn(move || {
+                let _exit = exit;
                 for work in rx {
                     work();
                 }
             })?;
-        Ok(Self { tx, thread })
+        Ok(Self { tx, stopped })
     }
-    fn finish(self) {
-        drop(self.tx);
-        let _ = self.thread.join();
+
+    fn stopped(&self) -> bool {
+        self.stopped.load(Ordering::Acquire)
+    }
+
+    fn drain(&self, wait: Duration) -> bool {
+        let (done, result) = mpsc::channel();
+        self.tx
+            .send(Box::new(move || {
+                let _ = done.send(());
+            }))
+            .is_ok()
+            && result.recv_timeout(wait).is_ok()
     }
 }
 type SaveResult = (String, Result<Option<PathBuf>, String>);
@@ -59,6 +93,11 @@ const TITLE_EVERY: Duration = Duration::from_secs(2);
 const FEED_EVERY: Duration = Duration::from_millis(2500);
 /// Notes are saved this long after the last key.
 const SAVE_AFTER: Duration = Duration::from_secs(2);
+// Give an in-flight write one autosave interval and a second for disk latency.
+const CLOSE_WAIT: Duration = Duration::from_secs(3);
+const CLOSE_RECOVERY_WAIT: Duration = Duration::from_secs(1);
+static NEXT_CLOSE_RECOVERY: AtomicU64 = AtomicU64::new(0);
+const WRITER_STOPPED: &str = "Notes saving stopped. Copy your notes or try saving again.";
 /// With no live file after this long, the panel says so instead of only "Listening".
 const NO_FEED_AFTER: Duration = Duration::from_secs(45);
 
@@ -272,6 +311,7 @@ pub struct Live {
     /// The editor's text at the last look, and the text on disk. They differ while typing.
     seen: String,
     saved: String,
+    save_unconfirmed: bool,
     recovered: Option<String>,
     edited_at: Option<Instant>,
     pub saving: Saving,
@@ -311,11 +351,39 @@ impl Live {
     }
 
     fn can_close(&self, text: &str) -> bool {
-        self.queued.is_empty() && (text == self.saved || self.recovered.as_deref() == Some(text))
+        self.queued.is_empty()
+            && ((!self.save_unconfirmed && text == self.saved)
+                || self.recovered.as_deref() == Some(text))
+    }
+
+    fn recover_on_close(&mut self, root: &Path, text: &str) -> bool {
+        // An older save can still overwrite or remove its own recovery file.
+        let path = root.join("unsaved-notes").join(format!(
+            "{}-close-{}-{}.md",
+            self.wall_start.timestamp_millis(),
+            std::process::id(),
+            NEXT_CLOSE_RECOVERY.fetch_add(1, Ordering::Relaxed),
+        ));
+        let (done, result) = mpsc::channel();
+        let draft = text.to_owned();
+        if thread::Builder::new()
+            .name("live-notes-recovery".into())
+            .spawn(move || {
+                let _ = done.send(feed_io::preserve_notes(None, &draft, &path));
+            })
+            .is_ok()
+            && matches!(result.recv_timeout(CLOSE_RECOVERY_WAIT), Ok(Ok(_)))
+        {
+            self.recovered = Some(text.to_owned());
+            return true;
+        }
+        false
     }
 
     fn needs_save(&self, text: &str) -> bool {
-        text != self.saved || self.queued.back().is_some_and(|queued| queued != text)
+        self.save_unconfirmed
+            || text != self.saved
+            || self.queued.back().is_some_and(|queued| queued != text)
     }
 
     fn new(phase: Phase, known: HashSet<String>) -> Self {
@@ -342,6 +410,7 @@ impl Live {
             notes_loaded: false,
             seen: String::new(),
             saved: String::new(),
+            save_unconfirmed: false,
             recovered: None,
             edited_at: None,
             saving: Saving::Quiet,
@@ -435,7 +504,7 @@ impl Live {
 impl State {
     pub(super) fn live_work(&mut self, work: impl FnOnce() + Send + 'static) -> bool {
         if self.live_writer.is_none() {
-            self.live_writer = NoteWriter::new().ok();
+            self.live_writer = NoteWriter::new(self.waker.clone()).ok();
         }
         self.live_writer
             .as_ref()
@@ -443,6 +512,10 @@ impl State {
     }
 
     fn live_saved(&mut self) -> bool {
+        let stopped = self.live_writer.as_ref().is_some_and(NoteWriter::stopped);
+        if stopped {
+            self.live_writer = None;
+        }
         let Some(live) = self.live.as_mut() else {
             return false;
         };
@@ -455,6 +528,7 @@ impl State {
                     live.recovered = None;
                     live.folder = Some(folder);
                     live.saved = text;
+                    live.save_unconfirmed = false;
                     if self.live_notes.text == live.saved {
                         live.edited_at = None;
                         live.saving = Saving::Saved;
@@ -473,6 +547,13 @@ impl State {
                 }
             }
         }
+        if stopped {
+            live.save_unconfirmed |= !live.queued.is_empty();
+            live.queued.clear();
+            live.edited_at = Some(Instant::now());
+            live.saving = Saving::Failed(WRITER_STOPPED.into());
+            changed = true;
+        }
         if live.close_failed && live.can_close(&self.live_notes.text) {
             live.close_failed = false;
             changed = true;
@@ -481,18 +562,39 @@ impl State {
     }
 
     pub fn live_close(&mut self) -> bool {
-        self.live_flush();
-        if let Some(writer) = self.live_writer.take() {
-            writer.finish();
+        self.live_close_after(CLOSE_WAIT)
+    }
+
+    fn live_close_after(&mut self, wait: Duration) -> bool {
+        if self
+            .live_writer
+            .as_ref()
+            .is_none_or(|writer| !writer.stopped())
+        {
+            self.live_flush();
         }
+        let drained = self
+            .live_writer
+            .as_ref()
+            .is_none_or(|writer| writer.drain(wait));
         self.live_saved();
+        if drained {
+            self.live_writer = None;
+        }
         let safe = self.live.as_mut().is_none_or(|live| {
-            let safe = live.can_close(&self.live_notes.text);
+            let text = &self.live_notes.text;
+            let safe = live.can_close(text) || live.recover_on_close(&self.store.root, text);
             live.close_failed = !safe;
+            if !safe {
+                live.saving = Saving::Failed("Could not save the latest notes.".into());
+            }
             safe
         });
         if safe {
-            self.parts_drop_unstarted(true);
+            // Pending-part cleanup takes the same write lock a stalled save may hold.
+            if self.live_writer.is_none() {
+                self.parts_drop_unstarted(true);
+            }
         } else {
             self.go_home();
             self.live_open = true;
@@ -928,7 +1030,9 @@ impl State {
         if edited {
             live.seen = self.live_notes.text.clone();
             live.edited_at = Some(Instant::now());
-            live.saving = Saving::Pending;
+            if !matches!(live.saving, Saving::Failed(_)) {
+                live.saving = Saving::Pending;
+            }
             changed = true;
         }
         if live.needs_save(&live.seen) {
@@ -972,7 +1076,9 @@ impl State {
             return false;
         }
         let folder = live.folder.clone();
-        let recovery = sidenote::core::state_dir()
+        let recovery = self
+            .store
+            .root
             .join("unsaved-notes")
             .join(format!("{}.md", live.wall_start.timestamp_millis()));
         let results = live.saves.clone();
@@ -997,10 +1103,9 @@ impl State {
             self.live_writer = None;
             self.live_saved();
             let live = self.live.as_mut().unwrap();
+            live.save_unconfirmed = true;
             live.queued.clear();
-            live.saving = Saving::Failed(
-                "Could not start saving notes. Keep this text before closing Sidenote.".into(),
-            );
+            live.saving = Saving::Failed(WRITER_STOPPED.into());
         }
         true
     }
@@ -1238,9 +1343,10 @@ fn bar(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -> El 
 /// The notes editor: plain text, several lines, under the "Meeting at HH:MM" heading.
 fn notes_view(s: &State, k: &Kit, p: Palette, narrow: bool, starting: bool) -> El {
     let saving = s.live.as_ref().map(|l| l.saving.clone());
+    let close_failed = s.live.as_ref().is_some_and(|live| live.close_failed);
     let status = match &saving {
-        Some(Saving::Pending) => Some(("Saving\u{2026}", p.faint)),
-        Some(Saving::Saved) => Some(("Saved", p.faint)),
+        Some(Saving::Pending) if !close_failed => Some(("Saving\u{2026}", p.faint)),
+        Some(Saving::Saved) if !close_failed => Some(("Saved", p.faint)),
         _ => None,
     };
     let mut head = row()
@@ -1282,9 +1388,18 @@ fn notes_view(s: &State, k: &Kit, p: Palette, narrow: bool, starting: bool) -> E
         .gap(if narrow { 10.0 } else { 12.0 })
         .child(head)
         .children(parts_status(s, p));
-    if let Some(Saving::Failed(_)) = saving {
-        let recovered = s.live.as_ref().is_some_and(|live| live.recovered.is_some());
-        let warning = save_warning(s.hex_recording() && !s.hex_status_unknown(), recovered);
+    if close_failed || matches!(&saving, Some(Saving::Failed(_))) {
+        let recovered = s
+            .live
+            .as_ref()
+            .is_some_and(|live| live.recovered.as_deref() == Some(s.live_notes.text.as_str()));
+        let warning = match saving {
+            _ if close_failed => {
+                "Sidenote could not save your latest notes. Copy them before closing.".into()
+            }
+            Some(Saving::Failed(error)) if error == WRITER_STOPPED => error,
+            _ => save_warning(s.hex_recording() && !s.hex_status_unknown(), recovered),
+        };
         c = c.child(
             col()
                 .key("live-save-warning")
@@ -1325,7 +1440,11 @@ fn notes_view(s: &State, k: &Kit, p: Palette, narrow: bool, starting: bool) -> E
                                     s.live_flush();
                                     s.parts_drop_unstarted(false);
                                 }),
-                        ),
+                        )
+                        .children(close_failed.then(|| {
+                            super::area::button("Close anyway", "live-close-anyway", p)
+                                .on_press_tx(|_: &mut State, tx| tx.quit())
+                        })),
                 ),
         );
     } else {
@@ -1999,7 +2118,7 @@ mod writer_tests {
 
     #[test]
     fn close_drains_queued_saves_before_stop() {
-        let writer = NoteWriter::new().unwrap();
+        let writer = NoteWriter::new(None).unwrap();
         let (tx, rx) = std::sync::mpsc::channel();
         for message in ["first save", "failed save", "last save", "stop"] {
             let tx = tx.clone();
@@ -2010,11 +2129,135 @@ mod writer_tests {
                 }))
                 .unwrap();
         }
-        writer.finish();
+        assert!(writer.drain(Duration::from_secs(1)));
         assert_eq!(
             rx.try_iter().collect::<Vec<_>>(),
             ["first save", "failed save", "last save", "stop"]
         );
+    }
+
+    fn close_fixture() -> (tempfile::TempDir, State) {
+        let root = tempfile::tempdir().unwrap();
+        let mut state = State::new();
+        state.store.root = root.path().to_owned();
+        let mut live = Live::new(Phase::Recording, HashSet::new());
+        live.folder = Some(root.path().to_owned());
+        live.notes_loaded = true;
+        state.live = Some(live);
+        state.live_notes = TextEdit::new("The latest draft");
+        (root, state)
+    }
+
+    #[test]
+    fn stuck_save_closes_with_an_independent_copy_of_the_latest_text() {
+        let (root, mut state) = close_fixture();
+        let (release, blocked) = mpsc::channel();
+        state.live_work(move || {
+            let _ = blocked.recv_timeout(Duration::from_secs(2));
+        });
+        state.live_notes = TextEdit::new("An earlier draft");
+        state.live_flush();
+        state.live_notes = TextEdit::new("The latest draft");
+        assert!(state.live_close_after(Duration::ZERO));
+        let copy = std::fs::read_dir(root.path().join("unsaved-notes"))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        assert_eq!(std::fs::read_to_string(&copy).unwrap(), "The latest draft");
+        release.send(()).unwrap();
+        assert!(
+            state
+                .live_writer
+                .take()
+                .unwrap()
+                .drain(Duration::from_secs(1))
+        );
+        assert_eq!(std::fs::read_to_string(copy).unwrap(), "The latest draft");
+    }
+
+    #[test]
+    fn panicked_worker_wakes_the_page_and_keeps_a_close_copy() {
+        let (root, mut state) = close_fixture();
+        let (wake, woken) = mpsc::channel();
+        state.waker = Some(Arc::new(move || {
+            let _ = wake.send(());
+        }));
+        state.live_work(|| panic!("simulated writer panic"));
+        woken.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(state.live_writer.as_ref().unwrap().stopped());
+        assert!(state.live_close_after(Duration::ZERO));
+        assert!(matches!(
+            &state.live.as_ref().unwrap().saving,
+            Saving::Failed(message) if message == WRITER_STOPPED
+        ));
+        assert_eq!(
+            state.live.as_ref().unwrap().recovered.as_deref(),
+            Some("The latest draft")
+        );
+        assert_eq!(
+            std::fs::read_dir(root.path().join("unsaved-notes"))
+                .unwrap()
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn panic_marks_the_next_edit_failed_until_it_is_retried() {
+        let (root, mut state) = close_fixture();
+        let (wake, woken) = mpsc::channel();
+        state.waker = Some(Arc::new(move || {
+            let _ = wake.send(());
+        }));
+        state.live_work(|| panic!("simulated writer panic"));
+        woken.recv_timeout(Duration::from_secs(1)).unwrap();
+        state.waker = None;
+        state.live_notes = TextEdit::new("A new edit");
+        assert!(state.live_tick());
+        assert!(state.live_writer.is_none());
+        assert!(matches!(
+            &state.live.as_ref().unwrap().saving,
+            Saving::Failed(message) if message == WRITER_STOPPED
+        ));
+        assert!(state.live_close_after(Duration::from_secs(1)));
+        assert_eq!(feed_io::read_notes(root.path()), "A new edit");
+    }
+
+    #[test]
+    fn closed_channel_uses_recovery_or_keeps_the_notes_on_screen() {
+        for blocked in [false, true] {
+            let (root, mut state) = close_fixture();
+            if blocked {
+                std::fs::write(root.path().join("unsaved-notes"), "blocked").unwrap();
+            }
+            let (tx, rx) = mpsc::channel();
+            drop(rx);
+            state.live_writer = Some(NoteWriter {
+                tx,
+                stopped: Arc::new(AtomicBool::new(false)),
+            });
+            assert_eq!(state.live_close_after(Duration::ZERO), !blocked);
+            assert_eq!(state.on_live(), blocked);
+            let live = state.live.as_ref().unwrap();
+            assert_eq!(live.close_failed, blocked);
+            assert_eq!(
+                live.recovered.as_deref(),
+                (!blocked).then_some("The latest draft")
+            );
+            assert_eq!(state.live_notes.text, "The latest draft");
+            assert!(state.live_writer.is_none());
+        }
+    }
+
+    #[test]
+    fn slow_work_within_the_close_limit_saves_to_the_meeting_folder() {
+        let (root, mut state) = close_fixture();
+        state.live_work(|| thread::sleep(Duration::from_millis(20)));
+        assert!(state.live_close_after(Duration::from_secs(1)));
+        assert_eq!(feed_io::read_notes(root.path()), "The latest draft");
+        assert!(!root.path().join("unsaved-notes").exists());
     }
 }
 

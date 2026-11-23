@@ -27,6 +27,56 @@ pub fn row_shell() -> El {
     row().w_full().items_center().gaps(12.0, 10.0).padding(14.0)
 }
 
+const ROW_PADDING: f32 = 14.0;
+const TILE: f32 = 28.0;
+const ROW_GAP: f32 = 12.0;
+
+pub fn settings_row(has_help: bool) -> El {
+    row()
+        .w_full()
+        .items_center()
+        .flex_wrap()
+        .gap(ROW_GAP)
+        .px(ROW_PADDING)
+        .py(if has_help { 9.0 } else { 7.0 })
+        .min_h(if has_help { 56.0 } else { 44.0 })
+}
+
+pub fn settings_tile(icon: &'static Icon, p: Palette) -> El {
+    col()
+        .size(TILE, TILE)
+        .center()
+        .radius(7.0)
+        .fill(p.chip)
+        .child(icons::draw(icon, icons::ROW, p.soft))
+}
+
+pub fn settings_copy(name: &str, p: Palette) -> El {
+    settings_copy_with_title(settings_title(name, p))
+}
+
+pub fn settings_title(name: &str, p: Palette) -> El {
+    rune::text(name)
+        .font(roles::NAV.style().lh(19.0))
+        .color(p.ink)
+        .wrap()
+}
+
+pub fn settings_copy_with_title(title: El) -> El {
+    col()
+        .grow(1.0)
+        .min_w(120.0)
+        .gap(roles::META_GAP)
+        .child(title)
+}
+
+pub fn settings_divider(p: Palette) -> El {
+    rune::el()
+        .h(1.0)
+        .ml(ROW_PADDING + TILE + ROW_GAP)
+        .fill(p.line)
+}
+
 pub fn copy(title: El, help: &str, p: Palette) -> El {
     col()
         .grow(1.0)
@@ -49,7 +99,15 @@ pub fn fold_control(title: &str, key: &str, open: bool, p: Palette) -> El {
             .items_center()
             .gap(8.0)
             .py(12.0)
-            .child(roles::CONTROL.line(if open { "\u{25be}" } else { "\u{25b8}" }, p.soft))
+            .child(icons::draw(
+                if open {
+                    &icons::CHEVRON_DOWN
+                } else {
+                    &icons::CHEVRON_RIGHT
+                },
+                icons::INLINE,
+                p.soft,
+            ))
             .child(roles::NAME.line(title, p.ink)),
     )
     .key(key)

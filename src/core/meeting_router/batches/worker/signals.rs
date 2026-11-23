@@ -6,8 +6,8 @@ use std::{
 use windows_sys::Win32::{
     Foundation::WAIT_OBJECT_0,
     System::Threading::{
-        CreateEventW, EVENT_MODIFY_STATE, OpenEventW, SetEvent, WaitForMultipleObjects,
-        WaitForSingleObject,
+        CreateEventW, EVENT_MODIFY_STATE, OpenEventW, SYNCHRONIZATION_SYNCHRONIZE, SetEvent,
+        WaitForMultipleObjects, WaitForSingleObject,
     },
 };
 
@@ -42,15 +42,22 @@ impl Signal {
         );
     }
     pub(super) fn notify(label: &str) {
+        if let Some(signal) = Self::from_args(label, EVENT_MODIFY_STATE) {
+            signal.set();
+        }
+    }
+    pub(super) fn open_for_wait(label: &str) -> Self {
+        Self::from_args(label, SYNCHRONIZATION_SYNCHRONIZE).expect("missing release signal")
+    }
+    pub(super) fn set(&self) {
+        assert_ne!(unsafe { SetEvent(self.0.as_raw_handle()) }, 0);
+    }
+    fn from_args(label: &str, access: u32) -> Option<Self> {
         let prefix = format!("{label}=");
-        let Some(name) = std::env::args().find_map(|a| a.strip_prefix(&prefix).map(str::to_owned))
-        else {
-            return;
-        };
+        let name = std::env::args().find_map(|a| a.strip_prefix(&prefix).map(str::to_owned))?;
         let wide: Vec<_> = name.encode_utf16().chain(Some(0)).collect();
-        let raw = unsafe { OpenEventW(EVENT_MODIFY_STATE, 0, wide.as_ptr()) };
+        let raw = unsafe { OpenEventW(access, 0, wide.as_ptr()) };
         assert!(!raw.is_null());
-        let event = unsafe { OwnedHandle::from_raw_handle(raw) };
-        assert_ne!(unsafe { SetEvent(event.as_raw_handle()) }, 0);
+        Some(Self(unsafe { OwnedHandle::from_raw_handle(raw) }))
     }
 }
