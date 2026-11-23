@@ -383,8 +383,8 @@ impl NativeWindow {
     }
     pub(super) fn update(&self, frame: Frame) {
         let prior = self.view.frame.replace(frame.clone());
-        let changed = icon_changed(&prior, &frame)
-            || unsafe { IsWindowVisible(self.view.icon.get()) == 0 };
+        let changed =
+            icon_changed(&prior, &frame) || unsafe { IsWindowVisible(self.view.icon.get()) == 0 };
         let card_changed = prior.id != frame.id
             || prior.recording != frame.recording
             || prior.raw != frame.raw
