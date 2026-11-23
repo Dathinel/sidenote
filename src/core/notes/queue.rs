@@ -227,7 +227,7 @@ fn complete(folder: &Path) -> bool {
     manifest(folder).is_ok_and(|m| m["status"] == "complete")
 }
 
-pub(super) fn enqueue_in(
+pub(crate) fn enqueue_in(
     root: &Path,
     meetings: &Path,
     id: &str,
@@ -235,6 +235,9 @@ pub(super) fn enqueue_in(
     settings: &NotesSettings,
 ) -> io::Result<()> {
     let _update_activity = crate::updates::activity()?;
+    let Some(_recycle) = core::meeting_delete::claim_write(root, id)? else {
+        return Ok(());
+    };
     if core::meeting_parts::held_in(root, meetings, id)?
         && meetings != core::meeting_parts::inputs(root)
     {
@@ -908,6 +911,9 @@ pub(super) fn drain_locked(
                     missing.push((id.to_owned(), job.as_ref().clone()))
                 }
                 Err(_) => {
+                    let Some(_recycle) = core::meeting_delete::claim_write(root, id)? else {
+                        continue;
+                    };
                     let target = path.with_extension(format!(
                         "json.{}.quarantined",
                         chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
@@ -929,6 +935,9 @@ pub(super) fn drain_locked(
                 .is_some_and(|h| run.installed(h))
         {
             for (id, mut job) in missing {
+                let Some(_recycle) = core::meeting_delete::claim_write(root, &id)? else {
+                    continue;
+                };
                 write(
                     root,
                     &id,
@@ -949,6 +958,9 @@ pub(super) fn drain_locked(
             )
         });
         let Some(id) = ready.into_iter().next() else {
+            return Ok(());
+        };
+        let Some(_recycle) = core::meeting_delete::claim_write(root, &id)? else {
             return Ok(());
         };
         let _job_lock = store_io::lock(&jobs(root).join(format!("{id}.lock")))?;
@@ -1281,6 +1293,11 @@ pub fn input_finished(root: &Path, folder: &Path, id: &str) -> io::Result<bool> 
     Ok(read(root, id)?.is_some_and(|job| {
         matches!(job.state, JobState::Done { .. }) && job.input_revision.as_ref() == Some(&revision)
     }))
+}
+
+pub(crate) fn recycle_busy(root: &Path, id: &str) -> io::Result<bool> {
+    Ok(active(root, id)?
+        || core::meeting_delete::lock_busy(&jobs(root).join(format!("{id}.lock")))?)
 }
 
 pub fn active(root: &Path, id: &str) -> io::Result<bool> {
