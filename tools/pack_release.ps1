@@ -2,7 +2,8 @@ param(
     [string]$Feed = (Join-Path $PSScriptRoot '../artifacts/releases'),
     [string]$DotnetRoot = $env:DOTNET_ROOT,
     [string]$GnuBin = $env:RUST_GNU_BIN,
-    [string]$ReleaseNotes = ''
+    [string]$ReleaseNotes = '',
+    [ValidateSet('stable', 'nightly')] [string]$Channel
 )
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path "$PSScriptRoot/..").Path
@@ -61,8 +62,16 @@ function Copy-CpuRuntime([string]$Destination, [string]$Target) {
 Push-Location -LiteralPath $root
 try {
     $version = [regex]::Match((Get-Content Cargo.toml -Raw), '(?m)^version = "([^"]+)"').Groups[1].Value
-    if (-not $version) { throw 'Cargo.toml has no package version.' }
-    $metadataJson = & cargo metadata --offline --locked --features asr-runtime --filter-platform x86_64-pc-windows-gnu --format-version 1
+    if (-not $Channel) { $Channel = if ($version -match '-dev\.') { 'nightly' } else { 'stable' } }
+    $Channel = $Channel.ToLowerInvariant()
+    $versionPattern = if ($Channel -eq 'nightly') { '^\d+\.\d+\.\d+-dev\.(0|[1-9]\d*)$' } else { '^\d+\.\d+\.\d+$' }
+    if ($version -notmatch $versionPattern) { throw "Cargo.toml version does not match the $Channel release channel." }
+    $vpkHelp = & vpk --skip-updates --help
+    if ($LASTEXITCODE -ne 0 -or -not ($vpkHelp -match '^\s*Velopack CLI 0\.0\.1298,')) {
+        throw 'Velopack CLI 0.0.1298 is required.'
+    }
+    $features = if ($Channel -eq 'nightly') { 'asr-runtime,nightly' } else { 'asr-runtime' }
+    $metadataJson = & cargo metadata --offline --locked --features $features --filter-platform x86_64-pc-windows-gnu --format-version 1
     if ($LASTEXITCODE) { throw 'Could not resolve locked dependency notices from the Cargo cache.' }
     $metadata = ($metadataJson -join "`n") | ConvertFrom-Json
     $stage = "$root/artifacts/updates-core/package-$version-$([guid]::NewGuid().ToString('N'))"
@@ -73,7 +82,7 @@ try {
         $uncovered = @($noticesResult.uncovered | ForEach-Object { "$($_.name) $($_.version): $($_.license) ($($_.reason))" })
         throw "Dependency notices are incomplete: $($uncovered -join '; '). Coverage: $stage/DEPENDENCY_NOTICE_COVERAGE.json"
     }
-    & cargo +stable-x86_64-pc-windows-gnu build --release --workspace --locked --bins --target x86_64-pc-windows-gnu --features asr-runtime
+    & cargo +stable-x86_64-pc-windows-gnu build --release --workspace --locked --bins --target x86_64-pc-windows-gnu --features $features
     if ($LASTEXITCODE) { throw 'Release build failed.' }
     New-Item -ItemType Directory -Force -Path $feedPath | Out-Null
     Copy-Item -LiteralPath "$($metadata.target_directory)/x86_64-pc-windows-gnu/release/sidenote.exe" -Destination "$stage/sidenote.exe" -Force
@@ -88,12 +97,12 @@ try {
         New-Item -ItemType Directory -Force -Path (Split-Path -Parent $destination) | Out-Null
         Copy-Item -LiteralPath (Join-Path $root $notice) -Destination $destination -Force
     }
-    $packArgs = @('pack', '--packId', 'sidenote', '--packVersion', $version, '--packDir', $stage,
+    $packArgs = @('pack', '--packId', 'sidenote', '--packVersion', $version, '--channel', $Channel, '--packDir', $stage,
         '--mainExe', 'sidenote.exe', '--icon', "$root/assets/icon/meetings.ico", '--packTitle', 'Sidenote', '--outputDir', $feedPath, '--shortcuts', 'StartMenuRoot')
     if ($ReleaseNotes) { $packArgs += @('--releaseNotes', (Resolve-Path -LiteralPath $ReleaseNotes).Path) }
     & vpk --skip-updates --yes @packArgs
     if ($LASTEXITCODE) { throw 'Velopack pack failed.' }
-    $index = Join-Path $feedPath 'releases.win.json'
+    $index = Join-Path $feedPath "releases.$Channel.json"
     $releases = Get-Content -LiteralPath $index -Raw | ConvertFrom-Json
     $full = @($releases.Assets | Where-Object Type -eq 'Full')
     $ordered = @($full | Sort-Object { (Get-Item -LiteralPath (Join-Path $feedPath $_.FileName)).LastWriteTimeUtc } -Descending)
@@ -106,7 +115,7 @@ try {
     [IO.File]::WriteAllText("$index.tmp", ($releases | ConvertTo-Json -Depth 20))
     Move-Item -LiteralPath "$index.tmp" -Destination $index -Force
     foreach ($asset in $remove) { Remove-Item -LiteralPath (Join-Path $feedPath $asset.FileName) -ErrorAction SilentlyContinue }
-    $legacy = Join-Path $feedPath 'RELEASES'
+    $legacy = Join-Path $feedPath "RELEASES-$Channel"
     if (Test-Path -LiteralPath $legacy) {
         $names = @($releases.Assets | ForEach-Object FileName)
         $lines = @(Get-Content -LiteralPath $legacy | Where-Object { ($_ -split ' ')[1] -in $names })
