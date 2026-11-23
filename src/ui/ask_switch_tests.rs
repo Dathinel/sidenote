@@ -1032,6 +1032,255 @@ fn a_connected_endpoint_answer_names_the_model_it_reported_or_says_it_did_not() 
     }
 }
 
+const STOP_QUESTION: &str = "When does the beta ship?";
+const PARTIAL_ANSWER: &str = "The beta ships on Friday.";
+
+fn start_stop_fixture(rt: &mut Runtime<State>) {
+    rt.update(|s, _| {
+        scene_agents(s, ALL_AGENTS);
+        let (saved, message_id) = s
+            .store
+            .append_message_identified(
+                MEETING,
+                Message {
+                    role: "user".into(),
+                    text: STOP_QUESTION.into(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        s.saved = saved;
+        s.question = TextEdit::default();
+        s.ask_open = true;
+        let mut run = AskRun::stand_in("Codex", &[], 0);
+        run.submitted_message_id = Some(message_id);
+        run.requested_model = Some("requested-model".into());
+        s.asks.insert(MEETING.into(), run);
+    });
+    rt.frame(0.0);
+    rt.settle_all();
+    rt.frame(0.0);
+}
+
+fn ask_fixture_progress(rt: &mut Runtime<State>, event: AskProgress) {
+    rt.update(|s, _| {
+        s.apply_event(Event::Progress {
+            id: MEETING.into(),
+            generation: 0,
+            event,
+        });
+    });
+    rt.frame(0.0);
+    rt.settle_all();
+    rt.frame(0.0);
+}
+
+fn worker_reports_stop(rt: &mut Runtime<State>) {
+    ask_fixture_progress(
+        rt,
+        AskProgress::Failed {
+            message: core::ask::STOPPED.into(),
+        },
+    );
+}
+
+fn assert_no_ask_alert(rt: &Runtime<State>) {
+    assert!(!rt.state.ask_errors.contains_key(MEETING));
+    assert!(!rt.elements().iter().any(|e| {
+        e.role == "alert"
+            && e.text
+                .as_deref()
+                .is_some_and(|text| text.starts_with("Could not answer."))
+    }));
+}
+
+fn stopped_label_count(rt: &Runtime<State>) -> usize {
+    rt.elements()
+        .iter()
+        .filter(|e| e.text.as_deref() == Some("Stopped"))
+        .count()
+}
+
+#[test]
+fn stop_keeps_the_streamed_answer_and_marks_it_in_the_thread() {
+    if in_parent("stop_keeps_the_streamed_answer_and_marks_it_in_the_thread") {
+        return;
+    }
+    let mut rt = page();
+    start_stop_fixture(&mut rt);
+    ask_fixture_progress(
+        &mut rt,
+        AskProgress::Model {
+            model: "reported-model".into(),
+        },
+    );
+    ask_fixture_progress(
+        &mut rt,
+        AskProgress::Text {
+            text: PARTIAL_ANSWER.into(),
+        },
+    );
+    assert!(rt.find("ask-streaming-answer").is_some());
+    assert_eq!(stopped_label_count(&rt), 0);
+    tap(&mut rt, "ask-stop");
+    assert!(rt.state.asks[MEETING].cancel.stopped());
+    worker_reports_stop(&mut rt);
+
+    let saved = rt.state.store.load(MEETING).unwrap();
+    let [question, answer] = saved.messages.as_slice() else {
+        panic!("expected the question and one partial answer, got {saved:?}");
+    };
+    assert_eq!(
+        (question.role.as_str(), question.text.as_str()),
+        ("user", STOP_QUESTION)
+    );
+    assert_eq!(
+        (answer.role.as_str(), answer.text.as_str()),
+        ("assistant", PARTIAL_ANSWER)
+    );
+    assert!(answer.stopped);
+    assert_eq!(answer.runner.as_deref(), Some("Codex"));
+    assert_eq!(answer.model.as_deref(), Some("reported-model"));
+    assert_eq!(answer.requested_model.as_deref(), Some("requested-model"));
+    assert_eq!(serde_json::to_value(answer).unwrap()["stopped"], true);
+    assert!(rt.state.question.text.is_empty());
+    assert_no_ask_alert(&rt);
+    assert!(rt.find("ask-streaming-answer").is_none());
+    assert_eq!(stopped_label_count(&rt), 1);
+    let answer_path = element(&rt, "msg-1").path + "/";
+    assert!(
+        rt.elements()
+            .iter()
+            .any(|e| e.path.starts_with(&answer_path) && e.text.as_deref() == Some("Stopped"))
+    );
+}
+
+#[test]
+fn stop_without_answer_text_returns_the_question_to_the_box() {
+    if in_parent("stop_without_answer_text_returns_the_question_to_the_box") {
+        return;
+    }
+    let mut rt = page();
+    for text in [None, Some(" \n\t ")] {
+        start_stop_fixture(&mut rt);
+        if let Some(text) = text {
+            let text = text.into();
+            ask_fixture_progress(&mut rt, AskProgress::Text { text });
+        }
+        tap(&mut rt, "ask-stop");
+        assert!(rt.state.asks[MEETING].cancel.stopped());
+        worker_reports_stop(&mut rt);
+
+        assert!(rt.state.store.load(MEETING).unwrap().messages.is_empty());
+        assert_eq!(rt.state.question.text, STOP_QUESTION);
+        assert_no_ask_alert(&rt);
+        assert!(rt.find("ask-thread").is_none());
+        assert_eq!(stopped_label_count(&rt), 0);
+    }
+}
+
+#[test]
+fn old_and_completed_answers_show_no_stop_label() {
+    if in_parent("old_and_completed_answers_show_no_stop_label") {
+        return;
+    }
+    let mut rt = page_with(DEFAULT_SIZE, || {
+        let root = core::state_dir();
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join(format!("{MEETING}.json")),
+            r#"{"messages":[{"role":"assistant","text":"An older answer."}]}"#,
+        )
+        .unwrap();
+    });
+    let old = &rt.state.saved.messages[0];
+    assert_eq!(old.text, "An older answer.");
+    assert!(!old.stopped);
+    assert!(rt.find("msg-0").is_some());
+    assert_eq!(stopped_label_count(&rt), 0);
+
+    start_stop_fixture(&mut rt);
+    let (tx, rx) = mpsc::channel();
+    tx.send(Ok("A finished answer.".into())).unwrap();
+    rt.state.asks.get_mut(MEETING).unwrap().rx = rx;
+    ask_fixture_progress(&mut rt, AskProgress::Finished);
+
+    let saved = rt.state.store.load(MEETING).unwrap();
+    let answer = saved.messages.last().unwrap();
+    assert_eq!(answer.text, "A finished answer.");
+    assert!(!answer.stopped);
+    assert!(
+        serde_json::to_value(answer)
+            .unwrap()
+            .get("stopped")
+            .is_none()
+    );
+    assert!(rt.find("msg-2").is_some());
+    assert_eq!(stopped_label_count(&rt), 0);
+}
+
+#[test]
+fn deletion_discards_streamed_text_even_after_the_user_pressed_stop() {
+    if in_parent("deletion_discards_streamed_text_even_after_the_user_pressed_stop") {
+        return;
+    }
+    use sidenote::core::meeting_delete::{Eligibility, Storage, read_visibility};
+
+    let mut rt = page_with(DEFAULT_SIZE, || {
+        let manifest = core::meetings_dir().join(MEETING).join("manifest.json");
+        std::fs::write(manifest, br#"{"status":"complete"}"#).unwrap();
+    });
+    start_stop_fixture(&mut rt);
+    let run = rt.state.asks.get_mut(MEETING).unwrap();
+    run.live = true;
+    run.visibility = *read_visibility();
+    ask_fixture_progress(
+        &mut rt,
+        AskProgress::Text {
+            text: PARTIAL_ANSWER.into(),
+        },
+    );
+    tap(&mut rt, "ask-stop");
+    assert!(rt.state.asks[MEETING].cancel.stopped());
+    Storage::new(&core::meetings_dir(), &rt.state.store.root)
+        .unwrap()
+        .delete(
+            MEETING,
+            "Synthetic".into(),
+            1,
+            |_| Ok(Eligibility::Ready),
+            |_| Ok(()),
+        )
+        .unwrap();
+    worker_reports_stop(&mut rt);
+
+    assert!(!rt.state.asks.contains_key(MEETING));
+    assert!(rt.state.store.load(MEETING).unwrap().messages.is_empty());
+    assert_eq!(stopped_label_count(&rt), 0);
+}
+
+#[test]
+fn cloud_recovery_discards_streamed_text_and_keeps_the_retry_question() {
+    if in_parent("cloud_recovery_discards_streamed_text_and_keeps_the_retry_question") {
+        return;
+    }
+    let mut rt = page();
+    start_stop_fixture(&mut rt);
+    rt.state.asks.get_mut(MEETING).unwrap().runner = core::provider::NAME.into();
+    ask_fixture_progress(
+        &mut rt,
+        AskProgress::Text {
+            text: PARTIAL_ANSWER.into(),
+        },
+    );
+    rt.update(|s, _| s.connection_recovery(2));
+
+    assert!(!rt.state.asks.contains_key(MEETING));
+    assert!(rt.state.store.load(MEETING).unwrap().messages.is_empty());
+    assert_eq!(rt.state.question.text, STOP_QUESTION);
+    assert_no_ask_alert(&rt);
+}
+
 /// At 390 wide the Ask panel keeps the page's 16 point gutter, Hide and Clear keep their own
 /// room inside it, the caption shrinks to what is left, and the page fades into the bar rather
 /// than being cut off at its edge.

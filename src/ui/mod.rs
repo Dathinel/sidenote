@@ -1080,7 +1080,7 @@ impl State {
         self.ask_settings.connection.settings.enabled || !self.runner_found.is_empty()
     }
 
-    /// Stop on a running Ask: its CLI is killed and the question goes back in the box.
+    /// Cancel a running Ask. Its worker can save any streamed text when it reports the stop.
     pub fn stop_ask(&mut self) {
         if let Some(run) = self.asks.get(&self.ask_key()) {
             response_time::superseded(run.response_time);
@@ -1438,6 +1438,16 @@ impl State {
     }
 
     fn finish_ask(&mut self, id: &str, run: AskRun, failure: Option<String>) {
+        self.finish_ask_run(id, run, failure, false);
+    }
+
+    fn finish_ask_run(
+        &mut self,
+        id: &str,
+        run: AskRun,
+        failure: Option<String>,
+        stopped_by_user: bool,
+    ) {
         self.refresh_areas();
         let outcome = match failure {
             Some(message) => Err(message),
@@ -1451,7 +1461,10 @@ impl State {
         } else if !run.response_time_ready {
             response_time::ready(run.response_time);
         }
-        let result = match outcome {
+        let stopped = stopped_by_user
+            && matches!(&outcome, Err(message) if message == core::ask::STOPPED)
+            && !run.text.trim().is_empty();
+        let result = match if stopped { Ok(run.text) } else { outcome } {
             Ok(text) => self.store.append_message(
                 id,
                 Message {
@@ -1461,6 +1474,7 @@ impl State {
                     model: run.reported_model.clone(),
                     requested_model: run.requested_model.clone(),
                     fallback: run.fell_back,
+                    stopped,
                     ..Default::default()
                 },
             ),
@@ -1845,7 +1859,9 @@ impl State {
                     }
                     AskProgress::Failed { message } => {
                         if let Some(run) = self.asks.remove(&id) {
-                            self.finish_ask(&id, run, Some(message));
+                            // Internal cancellations take the run out before stopping it.
+                            let stopped_by_user = run.cancel.stopped();
+                            self.finish_ask_run(&id, run, Some(message), stopped_by_user);
                         }
                     }
                 }

@@ -32,6 +32,8 @@ pub struct Message {
     /// A fallback helper wrote this answer.
     #[serde(default, skip_serializing_if = "is_false")]
     pub fallback: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub stopped: bool,
 }
 fn is_false(value: &bool) -> bool {
     !*value
