@@ -1,6 +1,23 @@
 use super::*;
 use crate::core::asr::Result;
 
+#[cfg(any(all(windows, feature = "asr-runtime"), test))]
+fn intra_threads(settings: &Settings) -> usize {
+    if settings.after_stop { 2 } else { 1 }
+}
+
+#[test]
+fn anuvani_requests_two_threads_only_after_stop() {
+    let mut settings = Settings::default();
+    assert_eq!(intra_threads(&settings), 1);
+    settings.mark_after_stop();
+    assert_eq!(intra_threads(&settings), 2);
+
+    let saved = serde_json::to_value(&settings).unwrap();
+    let restored = serde_json::from_value(saved).unwrap();
+    assert_eq!(intra_threads(&restored), 1);
+}
+
 pub(crate) trait Detector {
     fn scores(&mut self, samples: &[f32]) -> Result<Vec<f32>>;
     #[cfg(feature = "asr-runtime")]
@@ -91,7 +108,7 @@ pub(crate) fn load(settings: &Settings) -> Result<Box<dyn Detector>> {
     }
     crate::core::asr::initialize(&settings.runtime_dll)?;
     Ok(Box::new(Runtime {
-        model: crate::core::asr::Anuvani::load(&model)?,
+        model: crate::core::asr::Anuvani::load_with_threads(&model, intra_threads(settings))?,
         _verified: verified,
         _parents: parents,
     }))
