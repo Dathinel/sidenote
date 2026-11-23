@@ -11,8 +11,6 @@ pub mod ask_session;
 mod channel;
 pub use channel::{CHANNEL, Channel};
 pub mod asr;
-mod channel;
-pub use channel::{CHANNEL, Channel};
 pub mod check_state;
 pub mod config;
 pub mod engine_settings;
