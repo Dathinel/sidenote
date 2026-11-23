@@ -786,7 +786,11 @@ fn every_purge_boundary_can_be_retried_after_reopen() {
         let restarted = f.storage();
         assert_eq!(
             restarted.purge(&id, DUE).unwrap(),
-            expected_event != MoveEvent::Finished(Phase::Purged)
+            !matches!(
+                expected_event,
+                MoveEvent::Journal(Phase::Purged, WriteStage::Published)
+                    | MoveEvent::Finished(Phase::Purged)
+            )
         );
         assert_eq!(restarted.receipt(&id).unwrap().phase, Phase::Purged);
         assert_eq!(bytes_at(&dir).len(), 1);
