@@ -3,6 +3,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::sync::LazyLock;
 use std::{
+    collections::BTreeSet,
     fs, io,
     path::{Path, PathBuf},
 };
@@ -235,9 +236,13 @@ pub fn pending_quick_title(
     since_ms: i64,
     known: &std::collections::HashSet<String>,
 ) -> Option<String> {
+    let suppressed = super::meeting_delete::suppressed_ids(&state_dir()).ok()?;
     let mut best: Option<(i64, String)> = None;
     for entry in super::file_reads::dir_iter(local).ok()?.flatten() {
         let id = entry.file_name().to_string_lossy().into_owned();
+        if suppressed.contains(&id) {
+            continue;
+        }
         let Some(made) = id.split('-').next().and_then(|n| n.parse::<i64>().ok()) else {
             continue;
         };
@@ -764,18 +769,35 @@ fn recycle_meeting_in(
 }
 
 pub fn scan() -> (Vec<Meeting>, Vec<String>) {
-    let (mut meetings, mut errors) = scan_sources(&meetings_dir(), &peers_dir());
-    match super::meeting_parts::list(&state_dir()) {
+    let state = state_dir();
+    let (meetings, mut errors) = scan_catalog(&state, &meetings_dir(), &peers_dir());
+    if !super::file_reads::refreshing() {
+        errors.extend(super::sync_state::reconcile(&state));
+    }
+    (meetings, errors)
+}
+
+const SUPPRESSION_ERROR: &str = "Could not read deleted meeting IDs";
+
+pub fn scan_catalog(state: &Path, local: &Path, peers: &Path) -> (Vec<Meeting>, Vec<String>) {
+    let Ok(suppressed) = super::meeting_delete::suppressed_ids(state) else {
+        return (vec![], vec![SUPPRESSION_ERROR.into()]);
+    };
+    let (mut meetings, mut errors) = scan_sources_filtered(state, local, peers, &suppressed);
+    match super::meeting_parts::list(state) {
         Ok(parts) => {
             meetings.retain(|m| {
                 m.device.is_some() || !parts.iter().any(|s| s.parts.iter().any(|p| p.id == m.id))
             });
             for session in parts {
-                let folder = super::meeting_parts::inputs(&state_dir()).join(&session.id);
+                if suppressed.contains(&session.id) {
+                    continue;
+                }
+                let folder = super::meeting_parts::inputs(state).join(&session.id);
                 if let Ok(mut m) = Meeting::load_pending(&folder) {
                     m.minutes = Some(session.elapsed_ms().div_ceil(60_000));
                     if session.phase != super::meeting_parts::Phase::Ended
-                        && let Ok(text) = session.view_text(&meetings_dir())
+                        && let Ok(text) = session.view_text(local)
                     {
                         m.lines = parse_transcript(&text);
                         m.transcript_raw = text;
@@ -787,17 +809,26 @@ pub fn scan() -> (Vec<Meeting>, Vec<String>) {
         }
         Err(_) => errors.push("Could not read meeting parts".into()),
     }
-    if !super::file_reads::refreshing() {
-        errors.extend(super::sync_state::reconcile(&state_dir()));
-    }
     (meetings, errors)
 }
 
 /// Local ids reserve their place even while a summary is arriving or cannot be read.
 pub fn scan_sources(local: &Path, peers: &Path) -> (Vec<Meeting>, Vec<String>) {
-    let (mut meetings, mut errors) = scan_in(local);
-    let mut ids: std::collections::BTreeSet<String> =
-        meetings.iter().map(|m| m.id.clone()).collect();
+    let state = state_dir();
+    let Ok(suppressed) = super::meeting_delete::suppressed_ids(&state) else {
+        return (vec![], vec![SUPPRESSION_ERROR.into()]);
+    };
+    scan_sources_filtered(&state, local, peers, &suppressed)
+}
+
+fn scan_sources_filtered(
+    state: &Path,
+    local: &Path,
+    peers: &Path,
+    suppressed: &BTreeSet<String>,
+) -> (Vec<Meeting>, Vec<String>) {
+    let (mut meetings, mut errors) = scan_in_filtered(state, local, true, suppressed);
+    let mut ids: BTreeSet<String> = meetings.iter().map(|m| m.id.clone()).collect();
     if let Ok(entries) = super::file_reads::dir_iter(local) {
         for entry in entries.take(super::file_reads::ENTRIES_MAX).flatten() {
             if super::file_reads::directory(&entry.path()) {
@@ -822,7 +853,8 @@ pub fn scan_sources(local: &Path, peers: &Path) -> (Vec<Meeting>, Vec<String>) {
                     .unwrap_or_default()
                     .to_string_lossy()
                     .into_owned();
-                let (peer_meetings, peer_errors) = scan_in_mode(&folder, false);
+                let (peer_meetings, peer_errors) =
+                    scan_in_filtered(state, &folder, false, suppressed);
                 errors.extend(
                     peer_errors
                         .into_iter()
@@ -847,6 +879,19 @@ pub fn scan_in(root: &Path) -> (Vec<Meeting>, Vec<String>) {
     scan_in_mode(root, true)
 }
 pub(super) fn scan_in_mode(root: &Path, pending: bool) -> (Vec<Meeting>, Vec<String>) {
+    let state = state_dir();
+    let Ok(suppressed) = super::meeting_delete::suppressed_ids(&state) else {
+        return (vec![], vec![SUPPRESSION_ERROR.into()]);
+    };
+    scan_in_filtered(&state, root, pending, &suppressed)
+}
+
+fn scan_in_filtered(
+    state: &Path,
+    root: &Path,
+    pending: bool,
+    suppressed: &BTreeSet<String>,
+) -> (Vec<Meeting>, Vec<String>) {
     let mut meetings = Vec::new();
     let mut errors = Vec::new();
     match super::file_reads::dir_iter(root) {
@@ -864,7 +909,7 @@ pub(super) fn scan_in_mode(root: &Path, pending: bool) -> (Vec<Meeting>, Vec<Str
                     continue;
                 }
                 let id = entry.file_name().to_string_lossy().into_owned();
-                if super::recording_guard::hidden(&state_dir(), &folder, &id) {
+                if suppressed.contains(&id) || super::recording_guard::hidden(state, &folder, &id) {
                     continue;
                 }
                 let saved = folder.join("english-summary.json").exists()

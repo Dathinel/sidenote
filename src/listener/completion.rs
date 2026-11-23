@@ -50,7 +50,9 @@ pub(crate) fn handoff_in(
     dispatch: impl FnOnce() -> io::Result<()>,
 ) -> io::Result<Acceptance> {
     let _stage = core::idle_pass::Span::begin("completion_handoff");
-    if core::meeting_parts::held_in(state, meetings, id)? {
+    if core::meeting_delete::suppressed_ids(state)?.contains(id)
+        || core::meeting_parts::held_in(state, meetings, id)?
+    {
         return Ok(Acceptance::AlreadyAccepted);
     }
     let eligibility = recording_guard::eligibility(state, meetings, id)?;
