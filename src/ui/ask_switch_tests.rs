@@ -1224,7 +1224,7 @@ fn deletion_discards_streamed_text_even_after_the_user_pressed_stop() {
     if in_parent("deletion_discards_streamed_text_even_after_the_user_pressed_stop") {
         return;
     }
-    use core::meeting_delete::{Eligibility, Storage, read_visibility};
+    use sidenote::core::meeting_delete::{Eligibility, Storage, read_visibility};
 
     let mut rt = page();
     start_stop_fixture(&mut rt);
