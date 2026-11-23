@@ -12,6 +12,9 @@ const UNDO_FOR: Duration = Duration::from_secs(8);
 const RECYCLE_DIR: &str = "local/deleted-meetings";
 const OPEN_DELETED: &str = "open-deleted-meetings";
 const RESTORING: &str = "Restoring\u{2026}";
+const RESTORE_UNFINISHED: &str = "This restore will finish when you reopen Sidenote.";
+const RESTORE_REFUSED: &str = "Could not restore this meeting. It may have expired or be in use.";
+const INCOMPLETE_LIST: &str = "Some deleted meetings could not be read.";
 
 enum Dialog {
     Confirm {
@@ -19,7 +22,10 @@ enum Dialog {
         title: String,
         trigger: String,
     },
-    Deleted(Vec<(String, Receipt)>),
+    Deleted {
+        rows: Vec<(String, Receipt)>,
+        incomplete: bool,
+    },
 }
 
 type Position = (nav::Page, bool, nav::Filter);
@@ -97,6 +103,22 @@ fn remaining_days(receipt: &Receipt) -> u64 {
             .saturating_sub(receipt.deleted_ms)
             .max(0);
     (remaining.max(0) as u64).div_ceil(TimeDelta::days(1).num_milliseconds() as u64)
+}
+
+fn restore_error(root: &Path, id: &str) -> &'static str {
+    let unfinished = storage(root)
+        .and_then(|store| store.receipt(id))
+        .is_ok_and(|receipt| {
+            receipt.phase == Phase::Restoring
+                || receipt.phase == Phase::Restored
+                    && core::meeting_delete::suppressed_ids(root)
+                        .map_or(true, |hidden| !receipt.ids.is_disjoint(&hidden))
+        });
+    if unfinished {
+        RESTORE_UNFINISHED
+    } else {
+        RESTORE_REFUSED
+    }
 }
 
 fn reason(error: DeleteError) -> &'static str {
@@ -331,6 +353,9 @@ impl State {
         self.rebuild_nav();
         self.refresh_list();
         self.rebuild_tasks();
+        if self.finder.is_some() {
+            self.finder_changed();
+        }
         self.request_refresh();
     }
 
@@ -341,24 +366,27 @@ impl State {
         let root = &self.store.root;
         let result = (|| -> io::Result<_> {
             if !root.join(RECYCLE_DIR).try_exists()? {
-                return Ok(Vec::new());
+                return Ok((Vec::new(), false));
             }
             let store = storage(root)?;
             let mut rows = Vec::new();
+            let mut incomplete = false;
             for id in store.transactions()? {
-                let receipt = store.receipt(&id)?;
-                if receipt.phase == Phase::Deleted {
-                    rows.push((id, receipt));
+                match store.receipt(&id) {
+                    Ok(receipt) if receipt.phase == Phase::Deleted => rows.push((id, receipt)),
+                    Ok(_) => (),
+                    Err(_) => incomplete = true,
                 }
             }
             rows.sort_by_key(|(_, receipt)| Reverse(receipt.deleted_ms));
-            Ok(rows)
+            Ok((rows, incomplete))
         })();
         self.delete_ui.error = result
             .as_ref()
             .err()
             .map(|_| "Could not read deleted meetings.");
-        self.delete_ui.dialog = Some(Dialog::Deleted(result.unwrap_or_default()));
+        let (rows, incomplete) = result.unwrap_or_default();
+        self.delete_ui.dialog = Some(Dialog::Deleted { rows, incomplete });
     }
 
     fn restore_deleted(&mut self, id: &str) {
@@ -386,7 +414,7 @@ impl State {
                 Ok(meeting) => RecycleResult::Restored(meeting),
                 Err(_) => RecycleResult::Failed {
                     refresh: false,
-                    message: "Could not restore this meeting. It may have expired or be in use.",
+                    message: restore_error(&root, &id),
                 },
             }
         });
@@ -443,7 +471,7 @@ pub(super) fn overlay(s: &State, p: Palette, layer: &mut Vec<El>) {
                     .child(widgets::row_button(pending.unwrap_or("Delete meeting"), "delete-confirm", widgets::ButtonRole::Destructive, p)
                         .disabled(pending.is_some()).on_press(State::confirm_delete))),
         ),
-        Dialog::Deleted(rows) => (
+        Dialog::Deleted { rows, incomplete } => (
             "Deleted meetings",
             OPEN_DELETED,
             content
@@ -452,7 +480,7 @@ pub(super) fn overlay(s: &State, p: Palette, layer: &mut Vec<El>) {
                     .child(widgets::quiet_button("Close", "deleted-close", p)
                         .disabled(pending.is_some()).on_press(close)))
                 .children(pending.map(|label| roles::SMALL.wrap(label, p.soft).role("status")))
-                .children((rows.is_empty() && s.delete_ui.error.is_none()).then(|| roles::SMALL.wrap("No deleted meetings.", p.soft)))
+                .children((rows.is_empty() && !incomplete && s.delete_ui.error.is_none()).then(|| roles::SMALL.wrap("No deleted meetings.", p.soft)))
                 .child(col().gap(8.0).max_h(420.0).scroll(ScrollSpec { stick_bottom: false })
                     .children(rows.iter().map(|(id, receipt)| {
                         let date = DateTime::from_timestamp_millis(receipt.deleted_ms)
@@ -467,7 +495,8 @@ pub(super) fn overlay(s: &State, p: Palette, layer: &mut Vec<El>) {
                             .child(widgets::quiet_button("Restore", &format!("restore-{id}"), p)
                                 .disabled(days == 0 || pending.is_some())
                                 .on_press(move |s: &mut State| s.restore_deleted(&id)))
-                    }))),
+                    })))
+                .children(incomplete.then(|| roles::SMALL.wrap(INCOMPLETE_LIST, p.warn).role("status"))),
         ),
     };
     layer.push(rune_kit::scrim("meeting-delete-scrim", close).fill(p.scrim));
@@ -1067,7 +1096,7 @@ mod tests {
         tap(&mut rt, "meeting-breadcrumb-parent");
         assert!(rt.state.selected.is_none());
         tap(&mut rt, OPEN_DELETED);
-        let Some(Dialog::Deleted(rows)) = &rt.state.delete_ui.dialog else {
+        let Some(Dialog::Deleted { rows, .. }) = &rt.state.delete_ui.dialog else {
             panic!("the Deleted meetings button must open the list");
         };
         assert_eq!(rows.len(), 1);
@@ -1144,5 +1173,177 @@ mod tests {
         );
         assert!(rt.state.on_live());
         assert_eq!(rt.state.live_notes.text, "Unrelated live notes");
+    }
+
+    fn seed_deleted(store: &Storage, id: &str, title: &str) -> String {
+        store
+            .delete(
+                id,
+                title.into(),
+                Utc::now().timestamp_millis(),
+                |_| Ok(Eligibility::Ready),
+                |_| Ok(()),
+            )
+            .unwrap()
+    }
+
+    fn has_text(rt: &Runtime<State>, text: &str) -> bool {
+        rt.elements()
+            .iter()
+            .any(|e| e.text.as_deref() == Some(text))
+    }
+
+    #[test]
+    fn open_finder_tracks_delete_and_restore_completions() {
+        if in_parent("open_finder_tracks_delete_and_restore_completions") {
+            return;
+        }
+        let (id, mut rt) = fixture();
+        confirm_from(&mut rt, &id, "row");
+        let hex = hex_status("idle", &id);
+        tap(&mut rt, "delete-confirm");
+        rt.update(|s, _| s.open_finder());
+        rt.settle_all();
+        rt.frame(0.0);
+        assert!(has_text(&rt, "Recent meetings"));
+        wait_recycle(&mut rt);
+        hex.join().unwrap();
+        assert!(rt.state.finder.is_some());
+        assert!(!has_text(&rt, "Recent meetings"));
+
+        let transaction = rt.state.delete_ui.undo.clone().unwrap();
+        rt.update(|s, _| s.restore_deleted(&transaction));
+        wait_recycle(&mut rt);
+        assert!(rt.state.finder.is_some());
+        assert!(has_text(&rt, "Recent meetings"));
+    }
+
+    #[test]
+    fn unreadable_receipt_keeps_readable_deleted_rows() {
+        if in_parent("unreadable_receipt_keeps_readable_deleted_rows") {
+            return;
+        }
+        let (id, mut rt) = fixture();
+        let now = Utc::now().timestamp_millis();
+        let second = write_meeting(now - 1000, "Second workshop");
+        let third = write_meeting(now - 2000, "Third workshop");
+        let root = &rt.state.store.root;
+        let store = storage(root).unwrap();
+        let first = seed_deleted(&store, &id, TITLE);
+        let second = seed_deleted(&store, &second, "Second workshop");
+        let bad = seed_deleted(&store, &third, "Third workshop");
+        fs::write(root.join(RECYCLE_DIR).join(&bad).join("receipt.json"), "{").unwrap();
+
+        tap(&mut rt, OPEN_DELETED);
+        assert!(has_text(&rt, INCOMPLETE_LIST));
+        assert!(rt.find(&format!("restore-{first}")).is_some());
+        assert!(rt.find(&format!("restore-{second}")).is_some());
+        assert!(rt.find(&format!("restore-{bad}")).is_none());
+    }
+
+    #[test]
+    fn restore_error_explains_when_reopening_finishes_the_restore() {
+        use sidenote::core::meeting_delete::{MoveEvent, writer_claim};
+
+        if in_parent("restore_error_explains_when_reopening_finishes_the_restore") {
+            return;
+        }
+        let (id, mut rt) = fixture();
+        let root = rt.state.store.root.clone();
+        let store = storage(&root).unwrap();
+        let transaction = seed_deleted(&store, &id, TITLE);
+        tap(&mut rt, OPEN_DELETED);
+        let restore = format!("restore-{transaction}");
+        for (phase, message, interruption) in [
+            (Phase::Deleted, RESTORE_REFUSED, None),
+            (
+                Phase::Restoring,
+                RESTORE_UNFINISHED,
+                Some(MoveEvent::Receipt),
+            ),
+            (
+                Phase::Restored,
+                RESTORE_UNFINISHED,
+                Some(MoveEvent::Finished(Phase::Restored)),
+            ),
+        ] {
+            if let Some(interruption) = interruption {
+                assert!(
+                    store
+                        .restore_checked(&transaction, |event| {
+                            if event == interruption {
+                                return Err(io::Error::other("Interrupted restore"));
+                            }
+                            Ok(())
+                        })
+                        .is_err()
+                );
+            }
+            assert_eq!(store.receipt(&transaction).unwrap().phase, phase);
+            let claim = writer_claim(&root, &id).unwrap();
+            tap(&mut rt, &restore);
+            wait_recycle(&mut rt);
+            assert!(has_text(&rt, message));
+            drop(claim);
+        }
+    }
+
+    #[test]
+    fn startup_recovery_warning_survives_a_clean_refresh_until_dismissed() {
+        if in_parent("startup_recovery_warning_survives_a_clean_refresh_until_dismissed") {
+            return;
+        }
+        let (_, rt) = fixture();
+        let bad = rt
+            .state
+            .store
+            .root
+            .join(RECYCLE_DIR)
+            .join("0".repeat(32))
+            .join("receipt.json");
+        write(&bad, json!({}));
+        drop(rt);
+        let mut rt = runtime(State::new_with_delete_maintenance(true));
+        let warning = "Some deleted meetings could not be recovered or cleared.";
+        assert!(has_text(&rt, warning));
+
+        let options = rt.state.refresh_options();
+        let data = refresh::Data::read(options);
+        assert!(data.errors.is_empty());
+        poll_recycle_event(
+            &mut rt,
+            Event::Refreshed(refresh::Result {
+                generation: core::mutation_generation(),
+                options,
+                data: Some(Box::new(data)),
+            }),
+        );
+        assert!(has_text(&rt, warning));
+        tap(&mut rt, "delete-recovery-dismiss");
+        assert!(!has_text(&rt, warning));
+    }
+
+    #[test]
+    fn pending_settle_toast_waits_for_delete_undo_to_expire() {
+        if in_parent("pending_settle_toast_waits_for_delete_undo_to_expire") {
+            return;
+        }
+        let (id, mut rt) = fixture();
+        confirm_from(&mut rt, &id, "row");
+        let hex = hex_status("idle", &id);
+        tap(&mut rt, "delete-confirm");
+        rt.state.memory.settle_pending_toast =
+            Some(("Memory settled".into(), "fixture".into(), false));
+        wait_recycle(&mut rt);
+        hex.join().unwrap();
+        assert!(rt.find("delete-undo").is_some());
+        assert!(rt.state.memory.settle_pending_toast.is_some());
+
+        rt.state.toast.as_mut().unwrap().1 = Instant::now();
+        rt.poll = Some(crate::ui::poll);
+        rt.frame(0.0);
+        assert!(rt.state.memory.settle_pending_toast.is_none());
+        assert!(has_text(&rt, "Memory settled"));
+        assert!(rt.find("settle-toast-action").is_some());
     }
 }
