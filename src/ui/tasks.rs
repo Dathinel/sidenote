@@ -3920,6 +3920,7 @@ mod tests {
     fn tasks_page() -> rune::Runtime<State> {
         crate::test_paths::isolate();
         let mut state = State::new();
+        state.config.features.tasks = true;
         state.set_view(View::Tasks);
         state.tasks.layout = core::TasksLayout::List;
         state.tasks.done = DoneFilter::Open;
