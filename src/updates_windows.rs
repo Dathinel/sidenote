@@ -1,4 +1,5 @@
 //! Public and local Velopack feeds. Checks and downloads never apply an update.
+use crate::core::{CHANNEL, Channel};
 pub use crate::update_state::{CheckRequest, ListenerStatus, Phase, Status};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -12,7 +13,8 @@ use std::{
     time::{Duration, Instant},
 };
 use velopack::{
-    UpdateCheck, UpdateManager, VelopackAsset,
+    UpdateCheck, UpdateManager, UpdateOptions, VelopackAsset,
+    locator::VelopackLocatorConfig,
     sources::{FileSource, UpdateSource},
 };
 
@@ -41,6 +43,9 @@ impl HttpSource {
     fn url(&self, name: &str) -> Result<url::Url, velopack::Error> {
         Ok(url::Url::parse(&self.base)?.join(name)?)
     }
+    fn feed_url(&self, channel: &str) -> Result<url::Url, velopack::Error> {
+        self.url(&format!("releases.{channel}.json"))
+    }
     fn get(
         &self,
         url: &url::Url,
@@ -64,7 +69,7 @@ impl UpdateSource for HttpSource {
         app: &velopack::bundle::Manifest,
         id: &str,
     ) -> Result<velopack::VelopackAssetFeed, velopack::Error> {
-        let mut url = self.url(&format!("releases.{channel}.json"))?;
+        let mut url = self.feed_url(channel)?;
         url.query_pairs_mut()
             .append_pair("localVersion", &app.version.to_string())
             .append_pair("id", &app.id)
@@ -224,8 +229,51 @@ pub(crate) fn verify_sha256(reader: &mut impl Read, expected: &str) -> io::Resul
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const CHECK_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
-pub const PUBLIC_FEED: &str =
-    "https://github.com/harshanandak/hex-meetings/releases/latest/download/";
+pub const PUBLIC_FEED: &str = "https://github.com/harshanandak/sidenote/releases/latest/download/";
+
+fn public_feed(channel: Channel) -> &'static str {
+    match channel {
+        Channel::Stable => PUBLIC_FEED,
+        Channel::Nightly => "https://github.com/harshanandak/sidenote/releases/download/nightly/",
+    }
+}
+
+fn channel_name(channel: Channel) -> &'static str {
+    match channel {
+        Channel::Stable => "stable",
+        Channel::Nightly => "nightly",
+    }
+}
+
+fn selected_channel(root: &Path, fallback: Channel) -> Channel {
+    match fs::read(root.join("channel")).as_deref() {
+        Ok(b"stable") => Channel::Stable,
+        Ok(b"nightly") => Channel::Nightly,
+        _ => fallback,
+    }
+}
+
+pub fn channel() -> Channel {
+    selected_channel(&directory(), CHANNEL)
+}
+
+fn save_channel(root: &Path, choice: Channel) -> io::Result<()> {
+    let mut temp = tempfile::NamedTempFile::new_in(root)?;
+    temp.write_all(channel_name(choice).as_bytes())?;
+    match fs::remove_file(root.join("update-ready.json")) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    temp.persist(root.join("channel"))?;
+    Ok(())
+}
+
+pub fn set_channel(choice: Channel) -> Result<(), String> {
+    let _check =
+        exclusive("update-check.lock").map_err(|_| "Wait for the update check to finish.")?;
+    save_channel(&directory(), choice).map_err(|_| "Could not save the update channel.".into())
+}
 
 pub const FOCUS_CHECK_AFTER: Duration = Duration::from_secs(30 * 60);
 
@@ -326,7 +374,11 @@ fn read_status(directory: &Path) -> Status {
 fn read_saved_status(directory: &Path) -> Status {
     fs::read(directory.join("updates.json"))
         .ok()
-        .and_then(|b| serde_json::from_slice(&b).ok())
+        .and_then(|b| serde_json::from_slice::<Status>(&b).ok())
+        .filter(|status| match status.channel.as_deref() {
+            Some(name) => name == channel_name(selected_channel(directory, CHANNEL)),
+            None => status.phase != Phase::Ready,
+        })
         .unwrap_or_default()
 }
 fn pipeline_status(mut status: Status, marker: &Path) -> Status {
@@ -360,19 +412,53 @@ pub fn feed() -> Option<PathBuf> {
     crate::env_var("SIDENOTE_UPDATE_FEED").map(PathBuf::from)
 }
 pub fn source_label() -> String {
-    feed().map_or_else(|| PUBLIC_FEED.into(), |p| p.display().to_string())
+    feed().map_or_else(
+        || public_feed(channel()).into(),
+        |p| p.display().to_string(),
+    )
 }
-fn manager() -> Result<UpdateManager, String> {
+fn manager(channel: Channel) -> Result<UpdateManager, String> {
     let source: Box<dyn UpdateSource> = if let Some(feed) = feed() {
         if !feed.is_absolute() || feed.to_string_lossy().contains("://") {
             return Err("The update feed must be an absolute folder or file-share path.".into());
         }
         Box::new(LocalSource(feed))
     } else {
-        Box::new(HttpSource::new(PUBLIC_FEED))
+        Box::new(HttpSource::new(public_feed(channel)))
     };
-    UpdateManager::new_boxed(source, None, None)
+    channel_manager(source, channel, None)
         .map_err(|_| "Updates need a Sidenote Setup install. Manual builds cannot update.".into())
+}
+
+fn channel_manager(
+    source: Box<dyn UpdateSource>,
+    channel: Channel,
+    locator: Option<VelopackLocatorConfig>,
+) -> Result<UpdateManager, velopack::Error> {
+    let options = UpdateOptions {
+        ExplicitChannel: Some(channel_name(channel).into()),
+        AllowVersionDowngrade: false,
+        ..Default::default()
+    };
+    UpdateManager::new_boxed(source, Some(options), locator)
+}
+
+fn pending_asset(mgr: &UpdateManager, channel: Channel) -> Option<VelopackAsset> {
+    let (name, asset): (String, VelopackAsset) =
+        serde_json::from_slice(&fs::read(local("update-ready.json")).ok()?).ok()?;
+    if name != channel_name(channel) {
+        return None;
+    }
+    let path = cache_path(&asset).ok()?;
+    let manifest = velopack::bundle::load_bundle_from_file(path)
+        .ok()?
+        .read_manifest()
+        .ok()?;
+    (manifest.version > mgr.get_current_version()
+        && manifest.version.to_string() == asset.Version
+        && manifest.id == asset.PackageId
+        && manifest.channel == name)
+        .then_some(asset)
 }
 pub fn check(mut publish: impl FnMut(Status)) -> Result<Status, String> {
     if !installed() {
@@ -380,14 +466,16 @@ pub fn check(mut publish: impl FnMut(Status)) -> Result<Status, String> {
     }
     let mut publish = |status| publish(pipeline_status(status, &local("pipeline-install.pending")));
     let _check = exclusive("update-check.lock").map_err(|_| "Another update check is running.")?;
+    let channel = channel();
     let mut status = Status {
+        channel: Some(channel_name(channel).into()),
         phase: Phase::Checking,
         checked: Some(chrono::Local::now().to_rfc3339()),
         ..Default::default()
     };
     publish(status.clone());
     let result = (|| {
-        let mgr = manager()?;
+        let mgr = manager(channel)?;
         let update = mgr
             .check_for_updates()
             .map_err(|_| "Could not read the update feed. Check your connection and try again.")?;
@@ -427,7 +515,7 @@ pub fn check(mut publish: impl FnMut(Status)) -> Result<Status, String> {
                 verify(&update.TargetFullRelease)?;
                 fs::write(
                     local("update-ready.json"),
-                    serde_json::to_vec(&update.TargetFullRelease)
+                    serde_json::to_vec(&(channel_name(channel), &update.TargetFullRelease))
                         .map_err(|_| "Could not save the update.")?,
                 )
                 .map_err(|_| "Could not save the update.")?;
@@ -944,9 +1032,10 @@ pub fn window_start(publish: impl Fn(Phase)) -> Result<(), String> {
     if local("update-listener.resume").exists() {
         let _ = after_update();
     }
-    let pending = manager()
+    let channel = channel();
+    let pending = manager(channel)
         .ok()
-        .and_then(|mgr| mgr.get_update_pending_restart());
+        .and_then(|mgr| pending_asset(&mgr, channel));
     ensure_listener()?;
     finish_window_start(
         complete_pipeline_install(),
@@ -1254,18 +1343,10 @@ pub fn apply(
     };
     let _gate = exclusive("update-activity.lock")
         .map_err(|_| "Wait for Ask, routing and notes jobs to finish before installing.")?;
-    let mgr = manager()?;
-    let asset = mgr
-        .get_update_pending_restart()
-        .ok_or("Download an update first.")?;
-    let verified: VelopackAsset = fs::read(local("update-ready.json"))
-        .ok()
-        .and_then(|b| serde_json::from_slice(&b).ok())
-        .ok_or("Check for updates to verify the downloaded package first.")?;
-    if verified.Version != asset.Version || verified.FileName != asset.FileName {
-        return Err("Check for updates again before installing.".into());
-    }
-    verify(&verified)?;
+    let channel = channel();
+    let mgr = manager(channel)?;
+    let asset = pending_asset(&mgr, channel).ok_or("Check for updates before installing.")?;
+    verify(&asset)?;
     recording_idle()?;
     task_command(false)?;
     fs::write(local("update-listener.resume"), b"resume")
@@ -1413,6 +1494,88 @@ mod window_lock_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn channel_switch_selects_its_feed_and_only_offers_newer_versions() {
+        use Channel::{Nightly, Stable};
+
+        let stable = "0.1.0";
+        let nightly = "0.1.1-dev.10";
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path();
+        for (name, versions) in [
+            ("stable", [stable, "0.0.1-dev.47"]),
+            ("nightly", ["0.1.1-dev.9", nightly]),
+        ] {
+            let assets = versions.map(|version| VelopackAsset {
+                PackageId: "sidenote".into(),
+                FileName: format!("sidenote-{version}-full.nupkg"),
+                Version: version.into(),
+                Type: "Full".into(),
+                SHA256: "a".repeat(64),
+                ..Default::default()
+            });
+            fs::write(
+                path.join(format!("releases.{name}.json")),
+                serde_json::to_vec(&serde_json::json!({"Assets": assets})).unwrap(),
+            )
+            .unwrap();
+        }
+        let locator = VelopackLocatorConfig {
+            ManifestPath: path.join("app.nuspec"),
+            UpdateExePath: path.join("Update.exe"),
+            PackagesDir: path.into(),
+            ..Default::default()
+        };
+        fs::write(&locator.UpdateExePath, "").unwrap();
+        for (installed, default, choice, expected) in [
+            ("0.0.1-dev.47", Stable, None, Some(stable)),
+            ("0.1.1-dev.9", Nightly, None, Some(nightly)),
+            (stable, Stable, Some(Nightly), Some(nightly)),
+            (nightly, Nightly, Some(Stable), None),
+            (stable, Nightly, Some(Stable), None),
+            ("0.0.1-dev.47", Nightly, Some(Stable), Some(stable)),
+        ] {
+            fs::write(
+                &locator.ManifestPath,
+                format!("<package><metadata><id>sidenote</id><version>{installed}</version><mainExe>sidenote.exe</mainExe><channel>{}</channel></metadata></package>", channel_name(default)),
+            )
+            .unwrap();
+            if let Some(choice) = choice {
+                fs::write(path.join("update-ready.json"), "previous download").unwrap();
+                save_channel(path, choice).unwrap();
+                assert!(!path.join("update-ready.json").exists());
+            }
+            let selected = selected_channel(path, default);
+            assert_eq!(selected, choice.unwrap_or(default));
+            let manager = channel_manager(
+                Box::new(LocalSource(path.into())),
+                selected,
+                Some(locator.clone()),
+            )
+            .unwrap();
+            match (manager.check_for_updates().unwrap(), expected) {
+                (UpdateCheck::UpdateAvailable(update), Some(version)) => {
+                    assert_eq!(update.TargetFullRelease.Version, version);
+                }
+                (UpdateCheck::NoUpdateAvailable, None) => {}
+                _ => panic!("unexpected update for {installed} on {selected:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn public_update_feeds_use_sidenote_release_assets() {
+        for (channel, expected) in [
+            (Channel::Stable, "latest/download/releases.stable.json"),
+            (Channel::Nightly, "download/nightly/releases.nightly.json"),
+        ] {
+            let source = HttpSource::new(public_feed(channel));
+            let url = source.feed_url(channel_name(channel)).unwrap();
+            let expected = format!("https://github.com/harshanandak/sidenote/releases/{expected}");
+            assert_eq!(url.as_str(), expected);
+        }
+    }
 
     #[test]
     fn same_version_hooks_revalidate_scripts_and_listener() {

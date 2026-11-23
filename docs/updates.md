@@ -9,17 +9,18 @@ If a listener was running at the start and is absent at the end, the gate fails
 with a recorder warning. An unreadable process snapshot also fails the gate.
 The snapshots never start, stop or reconfigure the installed app or its task.
 
-Installed copies check the public HTTPS feed at
-`https://github.com/harshanandak/hex-meetings/releases/latest/download/`.
-Velopack's built-in `HttpSource` reads `releases.win.json` from that base URL
-and downloads the named packages from the same base. No additional dependency
-or Velopack feature is required. Checks run at startup and every six hours.
+Windows installs check their channel's HTTPS feed in `harshanandak/sidenote`.
+Stable reads `/releases/latest/download/releases.stable.json`. Nightly reads
+`/releases/download/nightly/releases.nightly.json` from the rolling Nightly
+prerelease. Settings > Updates can change the feed. Switching to Stable keeps
+the current build installed until Stable has a newer version. Checks run at
+startup and every six hours.
 Window focus also wakes the existing update worker when it is idle; the worker
 checks only if its last attempt (including a failure) was over 30 minutes ago.
 Manual builds do not start the worker. Manual checks can retry sooner.
 
 For development, set `SIDENOTE_UPDATE_FEED` in the launching environment to an
-absolute local folder or UNC file share containing `releases.win.json` and its
+absolute local folder or UNC file share containing the selected channel's JSON and its
 packages. This replaces the public source; URLs and relative paths are rejected.
 Clear the override to return to GitHub Releases. Restrict write access to local
 feeds: hashes detect corruption but do not authenticate an unsigned publisher.
@@ -27,20 +28,21 @@ feeds: hashes detect corruption but do not authenticate an unsigned publisher.
 ## Pack and publish a release
 
 1. Set the package version in `Cargo.toml` and update the workspace package's
-   entry in `Cargo.lock`. Use a fresh output folder for the initial 0.0.1 feed;
-   never publish the private 0.0.6 feed to this public channel.
+   entry in `Cargo.lock`. Stable starts at `0.1.0`, above `0.0.1-dev.47`.
+   Nightly starts at `0.1.1-dev.1`. Increment its numeric suffix for each build.
+   When Stable reaches the Nightly base version, advance Nightly to the next
+   patch base so every published Nightly sorts above the latest Stable.
 2. Install the matching Velopack CLI 0.0.1298 and .NET SDK. From the checkout,
-   run `tools/pack_release.ps1 -Feed <absolute-output-folder> -ReleaseNotes <markdown-file>`.
+   run `tools/local_build.ps1 -Pack` with the pinned release arguments and
+   `-Channel stable` or `-Channel nightly`. Gate with the same channel.
    The script builds and packs locally; it does not upload anything.
-3. Create a public GitHub Release in `harshanandak/hex-meetings`, tagged with the
-   package version (for example `v0.0.1`). Upload the generated `sidenote-win-Setup.exe`,
-   `releases.win.json`, and **every `.nupkg` referenced by that JSON**, preserving
-   filenames. Also retain the generated `RELEASES` manifest if present.
+3. Use a fresh output folder for each channel's first release. Put
+   `sidenote-<channel>-Setup.exe`, `releases.<channel>.json`, and **every
+   referenced `.nupkg`** on the channel's GitHub release, preserving filenames.
    The feed and all referenced packages must be assets on this same release,
    even when a package came from an older release. The app downloads full packages.
-4. Mark the release as the latest stable release, not a draft or prerelease.
-   The `/releases/latest/download/` URL must resolve to the release containing
-   the complete feed. Verify its assets before announcing it.
+4. Mark the version-tagged Stable release as latest. Use the `nightly` tag
+   for the rolling Nightly prerelease. Verify each feed and its assets.
 
 The package includes `LICENSE`, `THIRD_PARTY.md`, the Inter font licence,
 the webpki-roots CDLA licence, `DEPENDENCY_NOTICES.md`, and upstream licence,

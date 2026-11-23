@@ -107,10 +107,13 @@ function Invoke-InstallCheck([string]$Expected) {
     if ($LASTEXITCODE -ne 0) { throw 'Install check failed' }
 }
 function Invoke-ReleaseInstall {
+    $channel = if ($Version -match '-dev\.') { 'nightly' } else { 'stable' }
+    $setup = Join-Path $Feed "sidenote-$channel-Setup.exe"
+    if (-not (Test-Path -LiteralPath $setup -PathType Leaf)) { $setup = Join-Path $Feed 'sidenote-win-Setup.exe' }
     if ($WhatIf) {
         Write-Output '1. Require Hex idle with no capture jobs; reserve the existing update activity, window and worker locks; refuse pending notes/routing.'
         Write-Output '2. Request listener stop with its existing stop/resume markers; wait up to 8 seconds. Re-check Hex and Sidenote immediately before Setup.'
-        Write-Output '3. Run <Feed>/sidenote-win-Setup.exe --silent --log <Log>; release reservations only after Setup starts; wait and require exit 0.'
+        Write-Output "3. Run $(Split-Path -Leaf $setup) --silent --log <Log>; release reservations only after Setup starts; wait and require exit 0."
         Write-Output "4. Run installed sidenote.exe --veloapp-updated $Version; require success, then verify the listener within 30 seconds."
         Write-Output "5. Run tools/install_check.ps1 -Expect $Version; require every row to pass. Hex settings stay as they are; startup folder discovery catches recordings from the install window."
         return
@@ -136,7 +139,6 @@ function Invoke-ReleaseInstall {
         $stopOwned = $true
         if (-not (Test-Path -LiteralPath $resume)) { Write-NewMarker $resume 'resume'; $resumeCreated = $true }
         Wait-ListenerStopped (Join-Path $paths.Updates 'update-listener.lock')
-        $setup = Join-Path $Feed 'sidenote-win-Setup.exe'
         $logPath = [IO.Path]::GetFullPath($Log)
         $script:stage = 'silent Setup: require the feed installer'
         if (-not (Test-Path -LiteralPath $setup -PathType Leaf)) { throw 'Installer missing' }
