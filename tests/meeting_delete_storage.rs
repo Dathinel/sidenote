@@ -1,4 +1,4 @@
-use sidenote::core::meeting_delete::Storage;
+use sidenote::core::meeting_delete::{DeleteError, Eligibility, Phase, Storage, suppressed_ids};
 use std::{fs, path::PathBuf};
 
 struct Fixture {
@@ -161,4 +161,118 @@ fn multipart_inventory_attributes_only_exclusive_parts_and_state() {
     fs::remove_file(f.state.join("local/meeting-parts/12.json")).unwrap();
     fs::remove_file(f.meetings.join("11/manifest.json")).unwrap();
     assert!(store.inventory("10").is_err());
+}
+
+fn recorded_fixture(multipart: bool) -> Fixture {
+    let f = Fixture::new();
+    f.write("meetings/10/manifest.json", b"{}");
+    f.write("meetings/10/unknown/bytes", b"\0\xff");
+    f.write("meetings/10/notes.md", b"sidecar");
+    f.write("state/local/evidence/10/audio.wav", b"synthetic");
+    if multipart {
+        f.session("10", &["10", "11"]);
+        f.write("meetings/11/manifest.json", b"{}");
+        f.write("state/local/notes-jobs/11.json", b"other");
+    }
+    f
+}
+
+fn rename_hex(f: &Fixture, replaced: bool) {
+    fs::rename(f.meetings.join("10"), f.temp.path().join("original-hex")).unwrap();
+    if replaced {
+        f.write("meetings/10/manifest.json", b"{}");
+        f.write("meetings/10/notes.md", b"replacement notes");
+    }
+}
+
+fn assert_hex_unchanged(f: &Fixture, original: &[(PathBuf, Vec<u8>)], replaced: bool) {
+    assert_eq!(bytes_at(&f.temp.path().join("original-hex")), original);
+    let current = f.meetings.join("10");
+    if replaced {
+        assert_eq!(
+            bytes_at(&current),
+            [
+                (PathBuf::from("manifest.json"), b"{}".to_vec()),
+                (PathBuf::from("notes.md"), b"replacement notes".to_vec()),
+            ]
+        );
+    } else {
+        assert!(!current.exists());
+    }
+}
+
+#[test]
+fn journaled_stop_recovers_each_member() {
+    for multipart in [false, true] {
+        let f = recorded_fixture(multipart);
+        let mut events = Vec::new();
+        f.storage()
+            .delete(
+                "10",
+                String::new(),
+                10,
+                |_| Ok(Eligibility::Ready),
+                |event| {
+                    events.push(event);
+                    Ok(())
+                },
+            )
+            .unwrap();
+        for (stop, replaced) in
+            (0..events.len()).flat_map(|stop| [false, true].map(|replace| (stop, replace)))
+        {
+            let f = recorded_fixture(multipart);
+            let inventory = f.storage().inventory("10").unwrap();
+            let hex_before = bytes_at(&f.meetings.join("10"));
+            let mut event_number = 0;
+            let result = f.storage().delete(
+                "10",
+                String::new(),
+                10,
+                |_| Ok(Eligibility::Ready),
+                |event| {
+                    assert_eq!(event, events[event_number]);
+                    let at = event_number;
+                    event_number += 1;
+                    if at == stop {
+                        rename_hex(&f, replaced);
+                        return Err(std::io::Error::other("simulated stop"));
+                    }
+                    Ok(())
+                },
+            );
+            let trash = f.state.join("local/deleted-meetings");
+            let mut recycled = None;
+            match result {
+                Err(DeleteError::Failed(_)) => {}
+                Err(DeleteError::Partial { transaction, .. }) => {
+                    let transaction_dir = trash.join(&transaction);
+                    if transaction_dir.join("receipt.json").exists() {
+                        for _ in 0..2 {
+                            assert_eq!(f.storage().recover(&transaction).unwrap(), Phase::Deleted);
+                        }
+                        recycled = Some(transaction_dir);
+                    }
+                }
+                Ok(_) | Err(DeleteError::Refused(_)) => {
+                    panic!("expected a failed or partial transaction")
+                }
+            }
+            for (index, member) in inventory.members.iter().enumerate() {
+                assert_eq!(f.state.join(&member.relative).exists(), recycled.is_none());
+                if let Some(dir) = &recycled {
+                    assert!(dir.join(index.to_string()).exists());
+                }
+            }
+            assert_hex_unchanged(&f, &hex_before, replaced);
+            let count = if recycled.is_none() {
+                0
+            } else if multipart {
+                2
+            } else {
+                1
+            };
+            assert_eq!(suppressed_ids(&f.state).unwrap().len(), count);
+        }
+    }
 }

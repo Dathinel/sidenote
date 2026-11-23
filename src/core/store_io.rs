@@ -315,6 +315,16 @@ pub(crate) fn read_bounded(path: &Path, cap: u64) -> io::Result<Vec<u8>> {
 
 #[cfg(unix)]
 pub(super) fn checked_parent(path: &Path) -> io::Result<Parent> {
+    open_parent(path, true)
+}
+
+#[cfg(target_os = "linux")]
+pub(super) fn checked_parent_existing(path: &Path) -> io::Result<Parent> {
+    open_parent(path, false)
+}
+
+#[cfg(unix)]
+fn open_parent(path: &Path, create: bool) -> io::Result<Parent> {
     use std::{
         ffi::CString,
         os::{
@@ -348,7 +358,7 @@ pub(super) fn checked_parent(path: &Path) -> io::Result<Parent> {
             )
         };
         let mut child = open();
-        if child < 0 && io::Error::last_os_error().kind() == io::ErrorKind::NotFound {
+        if create && child < 0 && io::Error::last_os_error().kind() == io::ErrorKind::NotFound {
             if unsafe { libc::mkdirat(fd, name.as_ptr(), 0o700) } < 0
                 && io::Error::last_os_error().kind() != io::ErrorKind::AlreadyExists
             {

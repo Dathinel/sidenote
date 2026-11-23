@@ -486,3 +486,267 @@ impl Storage {
         Ok(data)
     }
 }
+
+fn sync_directory(path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    fs::File::open(path)?.sync_all()?;
+    let _ = path;
+    Ok(())
+}
+
+fn move_member(
+    from: &Path,
+    to: &Path,
+    member: &Member,
+    pending: bool,
+    index: usize,
+    checkpoint: &mut impl FnMut(MoveEvent) -> io::Result<()>,
+) -> io::Result<()> {
+    #[cfg(windows)]
+    if pending {
+        store_io::reject_reparse(from)?;
+        store_io::reject_reparse(to)?;
+        if !expected_member(from, member)? {
+            return Err(invalid());
+        }
+        crate::platform::publish_file(from, to)?;
+        checkpoint(MoveEvent::Moved(index))?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        use std::{ffi::CString, os::unix::ffi::OsStrExt};
+        let from_parent = store_io::checked_parent_existing(from)?;
+        let to_parent = store_io::checked_parent_existing(to)?;
+        let from_path = from_parent.path.join(from.file_name().ok_or_else(invalid)?);
+        let to_path = to_parent.path.join(to.file_name().ok_or_else(invalid)?);
+        if pending && !expected_member(&from_path, member)? {
+            return Err(invalid());
+        }
+        let from = CString::new(from_path.as_os_str().as_bytes()).map_err(|_| invalid())?;
+        let to = CString::new(to_path.as_os_str().as_bytes()).map_err(|_| invalid())?;
+        // A local recreation after preflight must never be overwritten.
+        if pending
+            && unsafe {
+                libc::renameat2(
+                    libc::AT_FDCWD,
+                    from.as_ptr(),
+                    libc::AT_FDCWD,
+                    to.as_ptr(),
+                    libc::RENAME_NOREPLACE,
+                )
+            } != 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        if pending {
+            checkpoint(MoveEvent::Moved(index))?;
+        }
+        checkpoint(MoveEvent::SyncMove(index, true))?;
+        sync_directory(&from_parent.path)?;
+        checkpoint(MoveEvent::SyncMove(index, false))?;
+        sync_directory(&to_parent.path)?;
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
+    return Err(io::ErrorKind::Unsupported.into());
+    if !expected_member(to, member)? {
+        return Err(invalid());
+    }
+    Ok(())
+}
+
+fn expected_member(path: &Path, member: &Member) -> io::Result<bool> {
+    match fs::symlink_metadata(path) {
+        Ok(m) if !crate::platform::linked(&m) => Ok(identity(path, &m)? == member.identity),
+        Ok(_) => Ok(false),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(e),
+    }
+}
+
+impl Storage {
+    fn lock(&self) -> io::Result<fs::File> {
+        store_io::lock(&self.state.join("local/deleted-meetings.lock"))
+    }
+
+    fn journal_bytes(receipt: &Receipt) -> io::Result<Vec<u8>> {
+        let seal = blake3::hash(&serde_json::to_vec(receipt)?)
+            .to_hex()
+            .to_string();
+        Self::bounded(&(seal, receipt))
+    }
+
+    fn bounded(value: &impl Serialize) -> io::Result<Vec<u8>> {
+        let bytes = serde_json::to_vec(value)?;
+        if bytes.len() as u64 > file_reads::SUMMARY_MAX {
+            return Err(store_io::invalid("Meeting recycle metadata is too large"));
+        }
+        Ok(bytes)
+    }
+
+    fn journal(
+        &self,
+        receipt: &Receipt,
+        checkpoint: &mut impl FnMut(MoveEvent) -> io::Result<()>,
+    ) -> io::Result<()> {
+        let path = self.transaction(&receipt.transaction)?.join("receipt.json");
+        store_io::atomic_write_checked(&path, &Self::journal_bytes(receipt)?, |stage| {
+            checkpoint(MoveEvent::Journal(receipt.phase, stage))
+        })
+    }
+
+    fn claims(&self, ids: &BTreeSet<String>) -> io::Result<Vec<fs::File>> {
+        ids.iter().map(|id| writer_claim(&self.state, id)).collect()
+    }
+
+    pub fn delete(
+        &self,
+        id: &str,
+        title: String,
+        now_ms: i64,
+        eligibility: impl FnOnce(&BTreeSet<String>) -> io::Result<Eligibility>,
+        mut moved: impl FnMut(MoveEvent) -> io::Result<()>,
+    ) -> Result<String, DeleteError> {
+        let _lock = self.lock()?;
+        let initial = self.selection(id)?;
+        let _claims = self.claims(&initial.ids)?;
+        let selected = self.selection(id)?;
+        if selected.ids != initial.ids || chrono::DateTime::from_timestamp_millis(now_ms).is_none()
+        {
+            return Err(invalid().into());
+        }
+        let eligibility = eligibility(&selected.ids)?;
+        if eligibility != Eligibility::Ready {
+            return Err(DeleteError::Refused(eligibility));
+        }
+        let Inventory {
+            ids,
+            members,
+            hex_inputs,
+        } = self.inventory_selected(id, selected)?;
+        let suppression: Suppression = store_io::read(&suppression_path(&self.state))?;
+        if ids.iter().any(|id| suppression.contains_key(id)) {
+            return Err(invalid().into());
+        }
+        let transaction = super::device::random_id()?;
+        let mut receipt = Receipt {
+            title,
+            ids,
+            deleted_ms: now_ms,
+            phase: Phase::Deleting,
+            transaction: transaction.clone(),
+            moved: vec![false; members.len()],
+            members,
+            hex_inputs,
+        };
+        // Moved flags shrink on delete. Reserve room for the longer restore phase.
+        if Self::journal_bytes(&receipt)?.len() as u64 + 16 > file_reads::SUMMARY_MAX {
+            return Err(invalid().into());
+        }
+        self.suppression_bytes(&receipt)?;
+        let dir = self.transaction(&transaction)?;
+        let parent = dir.parent().ok_or_else(invalid)?;
+        store_io::reject_reparse(parent)?;
+        moved(MoveEvent::SyncState)?;
+        sync_directory(&self.state)?;
+        fs::create_dir_all(parent)?;
+        moved(MoveEvent::CreatedRecycleRoot)?;
+        same_volume(self.volume()?, self.directory_volume(parent)?)?;
+        moved(MoveEvent::SyncLocal)?;
+        sync_directory(parent.parent().ok_or_else(invalid)?)?;
+        fs::create_dir(&dir)?;
+        moved(MoveEvent::CreatedTransaction)?;
+        moved(MoveEvent::SyncRecycleRoot)?;
+        sync_directory(parent)?;
+        self.journal(&receipt, &mut moved)
+            .and_then(|()| moved(MoveEvent::Receipt))
+            .and_then(|()| self.resume(&mut receipt, &mut moved))
+            .map_err(|source| DeleteError::Partial {
+                transaction: transaction.clone(),
+                source,
+            })?;
+        Ok(transaction)
+    }
+
+    fn suppression_bytes(&self, receipt: &Receipt) -> io::Result<Vec<u8>> {
+        let mut ids: Suppression = store_io::read(&suppression_path(&self.state))?;
+        for id in &receipt.ids {
+            if ids
+                .get(id)
+                .is_some_and(|owner| owner != &receipt.transaction)
+            {
+                return Err(invalid());
+            }
+            ids.insert(id.clone(), receipt.transaction.clone());
+        }
+        Self::bounded(&ids)
+    }
+
+    fn suppress(
+        &self,
+        receipt: &Receipt,
+        checkpoint: &mut impl FnMut(MoveEvent) -> io::Result<()>,
+    ) -> io::Result<()> {
+        store_io::atomic_write_checked(
+            &suppression_path(&self.state),
+            &self.suppression_bytes(receipt)?,
+            |stage| checkpoint(MoveEvent::Suppression(stage)),
+        )
+    }
+
+    fn recycled(dir: &Path, index: usize) -> PathBuf {
+        dir.join(index.to_string())
+    }
+
+    fn resume(
+        &self,
+        receipt: &mut Receipt,
+        moved: &mut impl FnMut(MoveEvent) -> io::Result<()>,
+    ) -> io::Result<()> {
+        let dir = self.transaction(&receipt.transaction)?;
+        let volume = self.volume()?;
+        let mut work = Vec::new();
+        for (index, member) in receipt.members.iter().enumerate() {
+            let original = self.state_path(&member.relative)?;
+            let recycled = Self::recycled(&dir, index);
+            let from = original;
+            let to = recycled;
+            let source = expected_member(&from, member)?;
+            let target = inspect(&to, volume)?;
+            let pending = match (source, target, receipt.moved[index]) {
+                (true, None, false) => true,
+                (false, Some(key), _) if key == member.identity => false,
+                _ => return Err(invalid()),
+            };
+            for path in [&from, &to] {
+                let parent = path.parent().ok_or_else(invalid)?;
+                same_volume(volume, self.directory_volume(parent)?)?;
+            }
+            work.push((index, from, to, pending));
+        }
+
+        self.suppress(receipt, moved)?;
+        moved(MoveEvent::Suppressed)?;
+        for (index, from, to, pending) in work {
+            if !receipt.moved[index] {
+                let member = &receipt.members[index];
+                move_member(&from, &to, member, pending, index, moved)?;
+                receipt.moved[index] = true;
+                self.journal(receipt, moved)?;
+                moved(MoveEvent::Recorded(index))?;
+            }
+        }
+        receipt.phase = Phase::Deleted;
+        self.journal(receipt, moved)?;
+        moved(MoveEvent::Finished(receipt.phase))
+    }
+
+    pub fn recover(&self, id: &str) -> io::Result<Phase> {
+        let _lock = self.lock()?;
+        let mut receipt = self.receipt(id)?;
+        let _claims = self.claims(&receipt.ids)?;
+        if receipt.phase == Phase::Deleting {
+            self.resume(&mut receipt, &mut |_| Ok(()))?;
+        }
+        Ok(receipt.phase)
+    }
+}
