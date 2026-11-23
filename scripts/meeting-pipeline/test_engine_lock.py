@@ -94,6 +94,42 @@ class EngineLockTests(unittest.TestCase):
             self.assertNotIn("done", log.read_text(encoding="utf-8-sig"))
             self.assertNotIn("PRIVATE_SENTINEL", log.read_text(encoding="utf-8-sig"))
 
+
+    def test_recycled_meeting_writers_defer_without_publication(self):
+        with tempfile.TemporaryDirectory(prefix="meeting-recycle-claim-") as tmp:
+            root = Path(tmp)
+            meeting = root / "100-1"
+            meeting.mkdir()
+            (meeting / "manifest.json").write_text('{"status":"complete"}')
+            original = (meeting / "manifest.json").read_bytes()
+            proof = root / "proof.ps1"
+            proof.write_text("""
+$ErrorActionPreference = 'Stop'
+. 'CLI'
+$sharedA = Enter-MeetingRecycleClaim 'MEETING'
+$sharedB = Enter-MeetingRecycleClaim 'MEETING'
+if ($null -eq $sharedA -or $null -eq $sharedB) { throw 'shared publication claim failed' }
+$path = $sharedA.Name
+$sharedA.Dispose()
+$sharedB.Dispose()
+$exclusive = [IO.File]::Open($path, 'Open', 'ReadWrite', 'None')
+try {
+    if ($null -ne (Enter-MeetingRecycleClaim 'MEETING')) { throw 'writer entered during recycle' }
+} finally { $exclusive.Dispose() }
+$state = Join-Path $env:SIDENOTE_DATA_DIR 'local/deleted-meeting-ids.json'
+[IO.File]::WriteAllText($state, '{"100-1":"synthetic"}')
+$result = & 'ENGLISH' -MeetingDir 'MEETING'
+if ($result -cne 'notes deferred engine busy') { throw 'deleted meeting was admitted' }
+""".replace("CLI", str(HERE / "hex-pipeline-cli.ps1")).replace("MEETING", str(meeting))
+                .replace("ENGLISH", str(HERE / "hex-meeting-english.ps1")))
+            result = subprocess.run(
+                ['powershell', '-NoProfile', '-File', str(proof)],
+                capture_output=True, text=True, timeout=20, creationflags=subprocess.CREATE_NO_WINDOW,
+                env=query_environment(root))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((meeting / "manifest.json").read_bytes(), original)
+            self.assertEqual(list(meeting.iterdir()), [meeting / "manifest.json"])
+
     def test_contention_release_and_crash(self):
         with tempfile.TemporaryDirectory(prefix="notes-claim-") as tmp:
             root = Path(tmp)

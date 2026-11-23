@@ -13,13 +13,17 @@ param(
     [switch]$Force
 )
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'hex-pipeline-cli.ps1')
 $utf8 = New-Object System.Text.UTF8Encoding $false
 $headChars = 6000
 $tailChars = 1500
 $sw = [Diagnostics.Stopwatch]::StartNew()
 $work = $null
+$recycleClaim = $null
 try {
     $dir = (Get-Item -LiteralPath $MeetingDir).FullName
+    $recycleClaim = Enter-MeetingRecycleClaim $dir
+    if ($null -eq $recycleClaim) { return }
     if (-not $OutFile) { $OutFile = Join-Path $dir 'quick-title.json' }
     if ((Test-Path -LiteralPath $OutFile) -and -not $Force) { Write-Host 'quick-title: already written, skipped'; exit 0 }
 
@@ -107,6 +111,7 @@ $sample
     Write-Host "quick-title: failed, skipped; diagnostic bytes=$([Text.Encoding]::UTF8.GetByteCount($_.Exception.Message))"
     if ($tmpFile) { Remove-Item -LiteralPath $tmpFile -Force -ErrorAction SilentlyContinue }
 } finally {
+    if ($null -ne $recycleClaim) { $recycleClaim.Dispose() }
     if ($work -and (Test-Path -LiteralPath $work)) { Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue }
 }
 exit 0

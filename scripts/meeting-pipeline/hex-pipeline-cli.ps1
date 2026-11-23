@@ -85,6 +85,40 @@ function Read-HexPrompt([string]$Path) {
     return $text
 }
 
+function Enter-MeetingRecycleClaim([string]$MeetingDir) {
+    $id = [IO.Path]::GetFileName([IO.Path]::GetFullPath($MeetingDir))
+    if ($id -cnotmatch '\A(?=.*[0-9])[0-9-]{1,100}\z') { return [IO.MemoryStream]::new() }
+    $data = if ($env:SIDENOTE_DATA_DIR) { $env:SIDENOTE_DATA_DIR }
+            elseif ($env:SIDENOTE_STATE_DIR) { $env:SIDENOTE_STATE_DIR }
+            elseif (Test-Path -LiteralPath (Join-Path $env:APPDATA 'sidenote')) { Join-Path $env:APPDATA 'sidenote' }
+            else { Join-Path $env:APPDATA 'hex-meetings' }
+    $local = Join-Path $data 'local'
+    $claims = Join-Path $local 'deleted-meeting-claims'
+    $path = Join-Path $claims $id
+    $suppression = Join-Path $local 'deleted-meeting-ids.json'
+    $result = $null
+    try {
+        foreach ($candidate in @($data, $local, $claims, $path, $suppression)) {
+            $entry = Get-Item -LiteralPath $candidate -Force -ErrorAction SilentlyContinue
+            if ($entry -and ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint)) { return $null }
+        }
+        [void][IO.Directory]::CreateDirectory($claims)
+        # Rust writers share read/write. Recycling opens this path with FileShare.None.
+        $result = [IO.File]::Open($path, 'OpenOrCreate', 'ReadWrite', 'ReadWrite')
+        if (Test-Path -LiteralPath $suppression) {
+            $ids = [IO.File]::ReadAllText($suppression) | ConvertFrom-Json -ErrorAction Stop
+            if ($ids -isnot [PSCustomObject] -or $ids.PSObject.Properties[$id]) {
+                $result.Dispose()
+                return $null
+            }
+        }
+        return $result
+    } catch {
+        if ($null -ne $result) { $result.Dispose() }
+        return $null
+    }
+}
+
 function Enter-NotesEngine([string]$MeetingDir) {
     # FileShare.None matches store_io::lock. The OS expires ownership on process death.
     try {

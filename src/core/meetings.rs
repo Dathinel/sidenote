@@ -685,7 +685,7 @@ fn recycle_meeting_in(
     }
     let storage = Storage::new(meetings, state)?;
     let settle = super::settle::Store::new(state.to_owned(), meetings.to_owned());
-    let mut claims = (None, None);
+    let mut claims = (None, None, None);
     storage.delete(
         id,
         title,
@@ -743,8 +743,17 @@ fn recycle_meeting_in(
             if let (Some(live), Some(settle)) =
                 (super::live::recycle_claim(), settle.recycle_claim(ids)?)
             {
+                let scripts =
+                    match super::store_io::try_lock(&state.join("local/notes-script.lock")) {
+                        Ok(lock) => lock,
+                        Err(e) if super::meeting_delete::busy(&e) => {
+                            return Ok(Eligibility::Processing);
+                        }
+                        Err(e) => return Err(e),
+                    };
                 let _ = claims.0.insert(live);
                 let _ = claims.1.insert(settle);
+                let _ = claims.2.insert(scripts);
                 Ok(Eligibility::Ready)
             } else {
                 Ok(Eligibility::Processing)
