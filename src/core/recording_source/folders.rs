@@ -317,6 +317,9 @@ mod tests {
     #[test]
     fn replay_after_enqueue_keeps_the_existing_router_job_generation() {
         use crate::core::{self, meeting_router::jobs, recording_source};
+        if jobs::isolated_test() {
+            return;
+        }
         const ID: &str = "9944771122-887766";
         struct One;
         impl Source for One {
@@ -338,7 +341,13 @@ mod tests {
         .unwrap();
         let root = tempfile::tempdir().unwrap();
         let cursor = root.path().join("source.json");
-        let pending = core::state_dir().join(format!("local/router-queue/{ID}.json"));
+        let state = core::state_dir();
+        let mut config = core::Config::default();
+        config.features.indic_engine = true;
+        config.pipeline.profile = "experimental".into();
+        config.labs.after_stop_language_routing = false;
+        core::store_io::write(&state.join("config.json"), &config).unwrap();
+        let pending = state.join(format!("local/router-queue/{ID}.json"));
         let mut first = Session::open(One, cursor.clone()).unwrap();
         assert_eq!(
             first.drain(|m| {

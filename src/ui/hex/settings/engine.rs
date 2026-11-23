@@ -1296,7 +1296,8 @@ mod tests {
     fn a_save_never_turns_an_untouched_stale_field_into_an_overwrite() {
         // Each kind of save in this tab is followed by a second, unrelated save.
         for kind in ["toggle", "step model", "prompt reset"] {
-            let (mut s, root) = state_with(EMPTY);
+            let (mut s, root) =
+                state_with(r#"{"version":1,"features":{"translation":true},"notes":{}}"#);
             let mut other = Config::load_in(root.path()).unwrap();
             other.engine_settings.worker_threads = 8;
             other.engine_settings.notes_prompt = Some("Synthetic other window".into());
