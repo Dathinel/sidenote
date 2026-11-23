@@ -270,23 +270,69 @@ pub fn section(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
 }
 pub fn recovery(s: &State, p: Palette) -> Option<El> {
     let id = s.ask_key();
-    if !s.ask_settings.connection.labels.contains_key(&id)
-        || (!s.ask_errors.contains_key(&id)
-            && !(s.asks.contains_key(&id) && s.ask_settings.connection.slow.contains(&id)))
-    {
+    let connection = &s.ask_settings.connection;
+    let last = connection.labels.get(&id)?;
+    let failed = s.ask_errors.contains_key(&id);
+    let slow = s.asks.contains_key(&id) && connection.slow.contains(&id);
+    if !failed && !slow {
         return None;
     }
-    let mut choices = row().gap(8.0).flex_wrap();
-    for (i, label) in provider::FALLBACK_CHOICES.iter().enumerate() {
-        choices = choices.child(
-            action(label, &format!("ask-connection-recovery-{i}"), p)
-                .on_press(move |s: &mut State| s.connection_recovery(i)),
+    let endpoint = connection
+        .settings
+        .enabled
+        .then(|| connection.settings.endpoint());
+    let local = matches!(&endpoint, Some(Ok(url)) if provider::is_local(url));
+    let retry = match endpoint {
+        None => format!(
+            "Try again with {}",
+            s.ask_runner_name().unwrap_or("installed agent")
+        ),
+        Some(Ok(_)) if local => "Try again with Local".into(),
+        Some(Ok(url)) => format!("Try again with {}", url.host_str().unwrap_or("Cloud")),
+        Some(Err(_)) => "Retry connection".into(),
+    };
+    let choices = row()
+        .gap(8.0)
+        .flex_wrap()
+        .child(
+            action(&retry, "ask-connection-recovery-0", p)
+                .on_press(|s: &mut State| s.connection_recovery(0)),
+        )
+        .children((!local && !last.starts_with("Local \u{b7} ")).then(|| {
+            action("Set up local connection", "ask-connection-recovery-1", p)
+                .on_press(|s: &mut State| s.connection_recovery(1))
+        }))
+        .child(
+            action(
+                provider::FALLBACK_CHOICES[2],
+                "ask-connection-recovery-2",
+                p,
+            )
+            .on_press(|s: &mut State| s.connection_recovery(2)),
         );
-    }
     Some(col().w_full().gap(6.0)
         .child(roles::META.wrap(if s.asks.contains_key(&id) { "Endpoint is taking longer than 15 seconds. You can keep waiting or start a new attempt." } else { "Choose how to retry. Changing endpoint or model requires saving the connection; remote changes require Ask opt-in." }, p.warn).role("alert"))
         .child(choices))
 }
+
+pub(super) fn known_metrics_label(metrics: &Metrics) -> String {
+    let mut parts = Vec::new();
+    if let Some(ms) = metrics.first_token_ms {
+        parts.push(format!("First token {:.2}s", ms as f64 / 1000.0));
+    }
+    parts.push(format!("Total {:.2}s", metrics.total_ms as f64 / 1000.0));
+    for (label, count) in [
+        ("tokens", metrics.total_tokens),
+        ("input tokens", metrics.prompt_tokens),
+        ("output tokens", metrics.completion_tokens),
+    ] {
+        if let Some(count) = count {
+            parts.push(format!("{count} {label}"));
+        }
+    }
+    parts.join(" \u{b7} ")
+}
+
 pub fn scene(s: &mut State, settings: bool) {
     if settings {
         s.ask_settings.connection.key = TextEdit::new("synthetic-render-only-key");

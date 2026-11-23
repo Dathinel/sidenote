@@ -558,40 +558,28 @@ fn choice_label(s: &State, name: Option<&str>, model: Option<&str>) -> String {
 fn runner_choice(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -> El {
     let shown = picker_label(s);
     let caption = if narrow {
-        shown
-            .rsplit_once(" \u{b7} ")
-            .map_or(shown.as_str(), |(agent, model)| {
-                if model == "provider default" {
-                    agent
-                } else {
-                    model
-                }
-            })
+        roles::CONTROL.wrap(&shown, p.soft).wrap_anywhere().shrink()
     } else {
-        &shown
+        roles::CONTROL.line(&shown, p.soft)
     };
     let hint = super::widgets::HelpHint::Model.build(k, p, layer);
-    let trigger = super::widgets::button("", "ask-model", super::widgets::ButtonRole::Ghost, p)
-        .h(28.0)
+    let trigger = super::widgets::pressable(row().items_center())
+        .key("ask-model")
+        .min_h(28.0)
         .px(8.0)
         .radius(14.0)
-        .gap(0.0)
-        .child(
-            row()
-                .gap(4.0)
-                .items_center()
-                .min_w(0.0)
-                .shrink()
-                .child(roles::CONTROL.line(caption, p.soft))
-                .child(rune::icon(k.glyph.chevron_down, 14.0).color(p.faint)),
-        )
+        .gap(4.0)
+        .hover(p.button_hover)
+        .press(p.button_pressed)
+        .child(caption)
+        .child(rune::icon(k.glyph.chevron_down, 14.0).color(p.faint))
         .role("combobox")
         .label(format!("Model: {shown}"))
         .description("Choose the model for your next question.")
         .preserve_focus_on_press(true)
         .focus_ring(1.0, 1.0, p.faint)
         .min_w(0.0)
-        .max_w(if narrow { 96.0 } else { 200.0 })
+        .max_w(if narrow { 160.0 } else { 200.0 })
         .hover_group_shared("help-hint-model")
         .child(
             hint.pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
@@ -942,16 +930,21 @@ pub fn overlay_with(
                     .w_full(),
             );
         }
+        let recovery = super::cloud_ask::recovery(s, p);
+        let recovering = recovery.is_some();
+        stack = stack.children(recovery);
         if let Some(metrics) = s.ask_settings.connection.metrics.get(&id) {
+            let label = if recovering {
+                super::cloud_ask::known_metrics_label(metrics)
+            } else {
+                metrics.label()
+            };
             stack = stack.child(
                 roles::META
-                    .wrap(metrics.label(), p.faint)
+                    .wrap(label, p.faint)
                     .key("ask-endpoint-timing")
                     .w_full(),
             );
-        }
-        if let Some(recovery) = super::cloud_ask::recovery(s, p) {
-            stack = stack.child(recovery);
         }
     }
     if !s.has_agent() && !pending && s.runner_error.is_none() {
@@ -1061,7 +1054,7 @@ pub fn overlay_with(
     let pill = row()
         .key("ask-pill")
         .w_full()
-        .h(44.0)
+        .min_h(44.0)
         .gap(4.0)
         .items_center()
         .pl(18.0)
@@ -1218,6 +1211,58 @@ fn dock(stack: El, p: Palette) -> El {
 #[cfg(test)]
 mod meeting_agent_tests {
     use super::*;
+    #[test]
+    fn local_endpoint_failure_shows_recovery_before_the_known_metrics() {
+        use core::provider::{Metrics, Settings};
+
+        crate::test_paths::isolate();
+        let mut state = State::new();
+        state.app_w.set(360.0);
+        let id = state.ask_key();
+        state
+            .ask_errors
+            .insert(id.clone(), "Endpoint failed".into());
+        let connection = &mut state.ask_settings.connection;
+        connection.settings = Settings {
+            enabled: true,
+            ..Settings::local()
+        };
+        connection
+            .labels
+            .insert(id.clone(), connection.settings.label());
+        connection.metrics.insert(
+            id,
+            Metrics {
+                total_ms: 750,
+                completion_tokens: Some(0),
+                ..Metrics::default()
+            },
+        );
+        let mut runtime = rune::Runtime::new(
+            state,
+            |s: &State, _| {
+                let p = super::super::theme::palette(true);
+                overlay(s, &super::super::theme::kit(&p), p, true, &mut Vec::new())
+            },
+            (360.0, 900.0),
+            rune::Env::default(),
+        );
+        runtime.frame(0.0);
+        let elements = runtime.elements();
+        let by_key = |key| elements.iter().find(|e| e.key.as_deref() == Some(key));
+        let retry = by_key("ask-connection-recovery-0").unwrap();
+        assert_eq!(retry.label.as_deref(), Some("Try again with Local"));
+        assert!(by_key("ask-connection-recovery-1").is_none());
+        let settings = by_key("ask-connection-recovery-2").unwrap();
+        let metrics = by_key("ask-endpoint-timing").unwrap();
+        assert!(retry.rect[1] + retry.rect[3] <= metrics.rect[1]);
+        assert!(settings.rect[1] + settings.rect[3] <= metrics.rect[1]);
+        assert_eq!(
+            metrics.text.as_deref(),
+            Some("Total 0.75s \u{b7} 0 output tokens")
+        );
+    }
+
     #[test]
     fn catalog_names_replace_ids_and_unknown_ids_remain_unchanged() {
         let runner =
