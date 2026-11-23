@@ -66,6 +66,11 @@ impl RunHex {
                 service.abort()
             }
             .into();
+            #[cfg(test)]
+            if !graceful && self.state["service_reaped"] == true {
+                super::super::hex_http::HTTP_PHASES
+                    .with_borrow_mut(|phases| phases.aborted = Some(Instant::now()));
+            }
             self.state["service_close_seconds"] = started.elapsed().as_secs_f64().into();
             self.cleanup(if graceful {
                 "english-batch-finished"
@@ -162,12 +167,7 @@ impl HexCommand for RunHex {
             self.state["service_starts"] = 1.into();
             self.save()?;
             let started = Instant::now();
-            let handshake_limit = timeout / 4;
-            #[cfg(test)]
-            {
-                self.state["test_handshake_limit"] = json!(handshake_limit);
-            }
-            let service = Service::start(&self.hex, handshake_limit);
+            let service = Service::start(&self.hex, timeout / 4);
             self.state["service_start_seconds"] = started.elapsed().as_secs_f64().into();
             match service {
                 Ok(service) => self.service = Some(service),
@@ -181,8 +181,12 @@ impl HexCommand for RunHex {
             }
         }
         let remaining = || {
+            let now = Instant::now();
+            #[cfg(test)]
+            super::super::hex_http::HTTP_PHASES
+                .with_borrow_mut(|phases| phases.request_budget = Some((now, deadline)));
             deadline
-                .checked_duration_since(Instant::now())
+                .checked_duration_since(now)
                 .ok_or(HexFailure::Timeout)
         };
         if let Some(service) = &mut self.service {
@@ -190,14 +194,7 @@ impl HexCommand for RunHex {
                 .windows(2)
                 .find(|a| a[0] == "--model")
                 .ok_or(HexFailure::InvalidRange)?[1];
-            let request_budget = remaining()?;
-            let request_limit = request_budget / 2;
-            #[cfg(test)]
-            {
-                self.state["test_request_budget"] = json!(request_budget);
-                self.state["test_request_limit"] = json!(request_limit);
-            }
-            let outcome = service.call(&self.hex, Path::new(args[2]), model, request_limit);
+            let outcome = service.call(&self.hex, Path::new(args[2]), model, remaining()? / 2);
             let identity = service.last_reply.clone();
             match outcome {
                 Ok(reply) => {

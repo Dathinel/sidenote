@@ -1,6 +1,8 @@
 //! Enter through the production bridge factory and batch executor, with real child HTTP I/O.
+use super::super::hex_http::HTTP_PHASES;
 use super::no_speech_tests::{Fixture, NativeFake};
 use super::*;
+use std::io::Write;
 fn captured() -> Value {
     serde_json::from_str(include_str!("http_reply_fixture.json")).unwrap()
 }
@@ -80,17 +82,44 @@ fn count(f: &Fixture, name: &str) -> u32 {
 fn receipt(f: &Fixture) -> Value {
     serde_json::from_slice(&fs::read(f.work.join("english-transport.json")).unwrap()).unwrap()
 }
-fn recorded_limit(receipt: &Value, key: &str) -> Duration {
-    serde_json::from_value(receipt[key].clone()).unwrap()
-}
-
-fn assert_request_budget(receipt: &Value) {
-    let handshake = recorded_limit(receipt, "test_handshake_limit");
-    let available = recorded_limit(receipt, "test_request_budget");
-    let request = recorded_limit(receipt, "test_request_limit");
-    assert!(!request.is_zero());
-    assert!(request <= available / 2, "reserve time for fallback");
-    assert!(handshake + request < Duration::from_secs(8));
+fn run_timed(f: &Fixture, mode: u8, timeout: Duration, request_timeout: Duration) {
+    HTTP_PHASES.take();
+    let result = run_with_request_timeout(f, timeout, request_timeout);
+    let finished = Instant::now();
+    let phases = HTTP_PHASES.take();
+    let (failed_at, request) = if mode == 4 {
+        assert!(phases.request_io.is_none());
+        (phases.handshake_failed.expect("handshake failure"), None)
+    } else {
+        let (started, failed) = phases.request_io.expect("stalled HTTP exchange");
+        let (sample, deadline) = phases.request_budget.expect("request budget clock");
+        let allowance = deadline.duration_since(sample) / 2;
+        (failed, Some((failed.duration_since(started), allowance)))
+    };
+    let reap = phases
+        .aborted
+        .expect("successful service abort")
+        .duration_since(failed_at);
+    let tail = finished.duration_since(phases.batches_done.expect("batch executor returned"));
+    // Write directly so hosted logs retain timing samples from passing runs.
+    writeln!(
+        std::io::stderr().lock(),
+        "HTTP fixture mode {mode}: request (elapsed, allowance)={request:?}, reap={reap:?}, tail={tail:?}"
+    )
+    .unwrap();
+    if let Some((elapsed, allowance)) = request {
+        let slack = Duration::from_millis(750);
+        assert!(
+            elapsed <= allowance + slack,
+            "stalled HTTP request exceeded its share"
+        );
+    }
+    assert!(reap < Duration::from_secs(8), "service was reaped late");
+    assert!(
+        tail < Duration::from_secs(8),
+        "batch teardown finished late"
+    );
+    result.unwrap();
 }
 
 fn reaped(f: &Fixture) {
@@ -169,7 +198,7 @@ fn production_http_failure_retains_baseline_without_owner_command() {
 fn production_http_timeout_reaps_request_and_handshake_children() {
     for mode in [3, 4] {
         let f = fixture(mode);
-        run(&f, Duration::from_secs(20)).unwrap();
+        run_timed(&f, mode, Duration::from_secs(20), Duration::from_secs(10));
         assert_eq!(count(&f, "starts"), 1);
         assert_eq!(count(&f, "command-calls"), 0);
         reaped(&f);
@@ -177,12 +206,9 @@ fn production_http_timeout_reaps_request_and_handshake_children() {
         if mode == 3 {
             assert_eq!(count(&f, "http-calls"), 1);
             assert_eq!(r["fallback_reason"], "service-request");
-            assert_request_budget(&r);
         } else {
             assert_eq!(count(&f, "http-calls"), 0);
             assert_eq!(r["fallback_reason"], "service-handshake");
-            let handshake = recorded_limit(&r, "test_handshake_limit");
-            assert!(!handshake.is_zero() && handshake < Duration::from_secs(8));
         }
     }
 }
@@ -190,14 +216,13 @@ fn production_http_timeout_reaps_request_and_handshake_children() {
 fn production_http_request_failure_preserves_whole_run_budget() {
     let f = fixture(9);
     // The caller's deadline, rather than the bridge's configured cap, limits this run.
-    run_with_request_timeout(&f, Duration::from_secs(10), Duration::from_secs(20)).unwrap();
+    run_timed(&f, 9, Duration::from_secs(10), Duration::from_secs(20));
     assert_eq!(count(&f, "starts"), 1);
     assert_eq!(count(&f, "http-calls"), 1);
     assert_eq!(count(&f, "command-calls"), 0);
     reaped(&f);
     let r = receipt(&f);
     assert_eq!(r["fallback_reason"], "service-request");
-    assert_request_budget(&r);
     assert!(f.work.join("hi.clock.json").exists());
     assert!(f.work.join("te.clock.json").exists());
 }
