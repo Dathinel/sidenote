@@ -591,7 +591,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn meeting_window_chooses_a_side_and_fits_the_work_area() {
         let work = [0, 0, 1334, 860];
         let small = [-350, 20, 0, 420];
