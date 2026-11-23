@@ -12,6 +12,8 @@ from gnu_toolchain import gnu_bin
 from prepare_people_fixture import prepare
 PAGES=[('general','settings-general',900),('meetings-recording','settings-recording',2200),('meetings-summaries','settings-summaries',1200),('meetings-tasks','settings-tasks',900),('meetings-engine','settings-engine',4600),('meetings-engine-invalid','settings-engine-invalid',4600),('meetings-engine-notes-error','settings-engine-notes-error',4600),('prompt-library','settings-prompts',1800),('prompts-edited','settings-prompts-edited',900),('prompts-diff','settings-prompts-diff',900),('prompts-sort','settings-prompts-sort',900),('prompts-redo','settings-prompts-redo',900),('prompts-conflict','settings-prompts-conflict',900),('prompts-readonly','settings-prompts-readonly',900),('people','settings-people',1800),('people-external','people-external',1800),('hex-dictation','settings-hex',1800),('models-agents','settings-helpers',3200),('models-speech','settings-speech',1400),('connected-apps','settings-mcp-mixed',2200),('appearance','settings-appearance',900),('sync','settings-sync',900),('privacy-data','settings-privacy',1800),('updates','settings-updates',900),('diagnostics','settings-diagnostics',1800)]
 
+PAGES.append(('experimental', 'settings-experimental', 900))
+
 def render(job):
  name,scene,width,theme,height,events=job
  tool_path=os.pathsep.join((str(gnu_bin()),os.environ.get('PATH','')))
@@ -21,7 +23,10 @@ def render(job):
  fixture=json.loads((ROOT/'tools/ui-fixtures/hex.json').read_text(encoding='utf-8'))
  fixture['settings']+=json.loads((ROOT/'tools/ui-fixtures/settings-recording.json').read_text(encoding='utf-8'))
  (state/'hex-fixture.json').write_text(json.dumps(fixture),encoding='utf-8')
- (state/'config.json').write_text(json.dumps(dict(version=1,features=dict(tasks=True,memory=True,daily_check=True,projects=True))),encoding='utf-8')
+ features=dict(tasks=True,memory=True,daily_check=True,projects=True)
+ if scene in ('settings-experimental', 'sidebar-experiments-off'):
+  features=dict(tasks=True,people=False,projects=False,memory=False,annotations=False,indic_engine=False,translation=False)
+ (state/'config.json').write_text(json.dumps(dict(version=1,features=features)),encoding='utf-8')
  (state/'projects.json').write_text(json.dumps(dict(projects=['Northwind Atlas','Northwind Field Guide'],aliases={})),encoding='utf-8')
  meetings=prepare(state)
  if scene=='memory':

@@ -176,3 +176,20 @@ pub fn strip(s: &State, p: Palette) -> Option<El> {
     }
     Some(card)
 }
+
+#[test]
+fn today_hides_daily_check_with_memory_off() {
+    let mut state = State::new();
+    state.check.latest.date = Some(chrono::Local::now().date_naive());
+    state.config.features.daily_check = true;
+    let palette = super::theme::palette(true);
+    for enabled in [true, false] {
+        state.config.features.memory = enabled;
+        assert_eq!(
+            items(&state, palette)
+                .iter()
+                .any(|item| item.key == "today-check"),
+            enabled
+        );
+    }
+}

@@ -60,12 +60,18 @@ impl PeopleUi {
 
 impl State {
     pub fn open_people(&mut self) {
+        if !self.config.features.people {
+            return;
+        }
         self.go_home();
         self.view = tasks::View::People;
         self.nav_done();
     }
 
     pub fn open_people_tab(&mut self, tab: usize) {
+        if !self.config.features.people {
+            return;
+        }
         if self.view != tasks::View::People {
             self.open_people();
         }

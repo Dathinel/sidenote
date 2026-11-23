@@ -1684,6 +1684,7 @@ pub enum Section {
     Shortcuts,
     Advanced,
     Features,
+    Experimental,
     MeetingEngine,
     Identity,
     PromptLibrary,
@@ -1694,10 +1695,11 @@ pub enum Section {
 }
 
 /// The tabs, left to right. Features comes first: it is the one that shapes the app itself.
-const SECTIONS: [Section; 11] = [
+const SECTIONS: [Section; 12] = [
     Section::Identity,
     Section::Meetings,
     Section::PromptLibrary,
+    Section::Experimental,
     Section::Dictation,
     Section::Connect,
     Section::ConnectedApps,
@@ -1710,7 +1712,7 @@ const SECTIONS: [Section; 11] = [
 
 impl Section {
     /// Every tab, in the order the page shows them.
-    pub const ALL: [Section; 11] = SECTIONS;
+    pub const ALL: [Section; 12] = SECTIONS;
 
     pub fn name(self) -> &'static str {
         match self {
@@ -1727,6 +1729,7 @@ impl Section {
             Self::Updates => "Updates",
             Self::MeetingModels => "Languages",
             Self::Features => "Features",
+            Self::Experimental => "Experimental features",
             Self::MeetingEngine => "Meeting engine",
             Self::Model => "Model",
             Self::Vocabulary => "Names and terms",
@@ -1755,6 +1758,7 @@ impl Section {
             Self::Updates => "Keep Sidenote up to date from your update folder.",
             Self::MeetingModels => "Choose spoken languages and download meeting models.",
             Self::Features => "Choose what appears on this device. Changes apply right away.",
+            Self::Experimental => "Choose which experimental features are enabled.",
             Self::MeetingEngine => "Models, steps and prompts for turning meetings into notes.",
             Self::Model => "The speech model Hex uses to write down what it hears.",
             Self::Vocabulary => "Names and terms Hex should spell the way you do.",

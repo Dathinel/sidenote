@@ -98,11 +98,13 @@ fn entries(s: &State, query: &str) -> Vec<Entry> {
     if f.tasks {
         pages.push(page("Tasks", "Tasks from your meetings", Target::Tasks));
     }
-    pages.push(page(
-        "People",
-        "Our team and external contacts",
-        Target::People,
-    ));
+    if f.people {
+        pages.push(page(
+            "People",
+            "Our team and external contacts",
+            Target::People,
+        ));
+    }
     if f.memory {
         pages.push(page(
             "Memory",
@@ -110,13 +112,16 @@ fn entries(s: &State, query: &str) -> Vec<Entry> {
             Target::Memory,
         ));
     }
-    if f.daily_check {
+    if f.daily_check && f.memory {
         pages.push(page("Diary", "Your days, newest first", Target::Check));
     }
     pages.push(page("Settings", "Hex and this app", Target::Settings(None)));
     if typed {
         // The Settings tabs are listed by name only when the query asks for one of them.
-        for section in hex::Section::ALL {
+        for section in hex::Section::ALL
+            .into_iter()
+            .filter(|s| hex::settings::section_visible(*s))
+        {
             pages.push(page(
                 &format!("Settings \u{b7} {}", section.name()),
                 section.blurb(),
@@ -126,7 +131,7 @@ fn entries(s: &State, query: &str) -> Vec<Entry> {
         pages.retain(|e| contains(&e.title, &q) || contains(&e.detail, &q));
     }
 
-    if !typed || contains("Companies company records people", &q) {
+    if f.people && (!typed || contains("Companies company records people", &q)) {
         pages.push(page(
             "Companies",
             "Company records and people",
@@ -134,6 +139,9 @@ fn entries(s: &State, query: &str) -> Vec<Entry> {
         ));
     }
     for company in s.companies.data.catalog.records.values().filter(|c| {
+        if !f.people {
+            return false;
+        }
         !typed
             || contains(
                 &format!(
@@ -316,7 +324,7 @@ impl State {
             }
             Target::Settings(section) => {
                 self.open_hex();
-                if let Some(section) = section {
+                if let Some(section) = section.filter(|s| hex::settings::section_visible(*s)) {
                     self.hex.section = section;
                 }
                 self.nav_done();
