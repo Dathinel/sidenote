@@ -1,6 +1,6 @@
 use super::{
     State,
-    hex::settings::{card, setting_row},
+    hex::settings::{card, row_field_kit, setting_row, short_select_width},
     roles,
     theme::Palette,
     widgets::{self, ButtonRole},
@@ -120,6 +120,7 @@ fn action(label: &str, key: &str, p: Palette) -> El {
     widgets::button(label, key, ButtonRole::Secondary, p)
 }
 pub fn section(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
+    let k = &row_field_kit(k, p);
     let c = &s.ask_settings.connection;
     let presets = [
         "OpenRouter",
@@ -131,7 +132,7 @@ pub fn section(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
     let preset = Select::new("ask-connection-preset", &presets.map(str::to_string))
         .label("Connection preset")
         .placeholder("Fill from a preset")
-        .width(230.0)
+        .width(short_select_width(s, 230.0))
         .appearance(SelectAppearance::Field)
         .open(s.ask_settings.select_open.as_deref() == Some("ask-connection-preset"))
         .on_toggle(|s: &mut State| {
@@ -162,6 +163,7 @@ pub fn section(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
         })
         .build(k, layer);
     let url = TextInput::new(&c.url)
+        .height(30.0)
         .label("Endpoint base URL")
         .placeholder("https://host/v1")
         .width(Some(270.0))
@@ -169,6 +171,7 @@ pub fn section(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
         .build(k)
         .key("ask-connection-url");
     let model = TextInput::new(&c.model)
+        .height(30.0)
         .label("Endpoint model")
         .placeholder("Exact model ID")
         .width(Some(270.0))
@@ -176,6 +179,7 @@ pub fn section(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
         .build(k)
         .key("ask-connection-model");
     let key = TextInput::new(&c.key)
+        .height(30.0)
         .secure()
         .label("Optional API key")
         .placeholder("Leave empty for no key")

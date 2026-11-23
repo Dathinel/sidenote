@@ -1821,15 +1821,10 @@ fn keep_audio_row(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
     let current = audio.current;
     let busy = h.busy_keys.contains("meetings.audio_retention");
     let can = h.can(Feature::SettingsSet) && h.settings_note.is_none() && !busy && audio.editable;
-    let mut text = col()
-        .grow(1.0)
-        .min_w(220.0)
-        .gap(4.0)
-        .child(roles::NAME.wrap("Keep audio", p.ink))
-        .child(roles::SMALL.line(
-            "Sidenote keeps the sound file next to the transcript.",
-            p.soft,
-        ));
+    let mut text = crate::ui::cards::settings_copy("Keep audio", p).child(roles::META.wrap(
+        "Sidenote keeps the sound file next to the transcript.",
+        p.soft,
+    ));
     if let Some(reason) = h.page_note().or(h.settings_note) {
         text = text.child(roles::SMALL.wrap(reason, p.soft));
     } else if !can && !busy {
@@ -1859,7 +1854,7 @@ fn keep_audio_row(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
         })
         .placeholder("Not read from Hex")
         .appearance(SelectAppearance::Field)
-        .width(220.0)
+        .width(settings::short_select_width(s, 220.0))
         .disabled(!can)
         .open(can && h.select_open.as_deref() == Some("keep-audio"))
         .on_toggle(|s: &mut State| {
@@ -1871,14 +1866,12 @@ fn keep_audio_row(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
         })
         .on_close(|s: &mut State| s.hex.select_open = None)
         .on_choose(|s: &mut State, value: &str, _: &mut Tx| s.hex_keep_audio(value))
-        .build(k, layer);
-    row()
-        .w_full()
-        .items_center()
-        .flex_wrap()
-        .gaps(12.0, 10.0)
-        .padding(14.0)
-        .child(settings::icon_tile(&super::icons::AUDIO_LINES, p))
+        .build(&settings::row_field_kit(k, p), layer);
+    crate::ui::cards::settings_row(true)
+        .child(crate::ui::cards::settings_tile(
+            &super::icons::AUDIO_LINES,
+            p,
+        ))
         .child(text)
         .child(control)
 }
@@ -1898,30 +1891,36 @@ fn setting_row(
     let key = st.key.clone();
     let name = settings::setting_name(st);
     let can = editable(st) && h.can(Feature::SettingsSet) && !h.busy_keys.contains(&key);
-    let mut text = col().gap(4.0).grow(1.0).min_w(170.0).child(
-        row()
-            .items_center()
-            .flex_wrap()
-            .gap(8.0)
-            .child(roles::NAME.wrap(name.clone(), p.ink)),
-    );
+    let compact = settings::compact_rows(s);
+    let help_role = if compact { roles::META } else { roles::SMALL };
+    let mut text = if compact {
+        crate::ui::cards::settings_copy(&name, p)
+    } else {
+        col().gap(4.0).grow(1.0).min_w(170.0).child(
+            row()
+                .items_center()
+                .flex_wrap()
+                .gap(8.0)
+                .child(roles::NAME.wrap(name.clone(), p.ink)),
+        )
+    };
     if !st.about.is_empty() {
         text = text.child(
-            roles::SMALL
+            help_role
                 .wrap(settings::setting_help(st), p.soft)
                 .help_when_truncated(settings::setting_help(st)),
         );
     }
     if st.available == Some(false) {
-        text = text.child(roles::SMALL.wrap("Not available here.", p.soft));
+        text = text.child(help_role.wrap("Not available here.", p.soft));
     } else if !st.writable {
-        text = text.child(roles::SMALL.wrap("Read only.", p.soft));
+        text = text.child(help_role.wrap("Read only.", p.soft));
     }
     if let Some(e) = h.row_errors.get(&key) {
-        text = text.child(roles::SMALL.medium().wrap(e.clone(), p.warn).role("alert"));
+        text = text.child(help_role.medium().wrap(e.clone(), p.warn).role("alert"));
     }
     if h.busy_keys.contains(&key) {
-        text = text.child(roles::SMALL.wrap("Saving.", p.soft));
+        text = text.child(help_role.wrap("Saving.", p.soft));
     }
     // A folder or file path needs more room than a short value.
     let width = if st.kind == "path" {
@@ -1945,6 +1944,8 @@ fn setting_row(
             .child(roles::CONTROL.wrap(readable::current_label(st), p.ink))
             .children(editable(st).then(|| {
                 crate::ui::widgets::action("Edit model", p)
+                    .px(if compact { 10.0 } else { 12.0 })
+                    .radius(if compact { 7.0 } else { 8.0 })
                     .key(model_edit_key)
                     .on_press(move |s: &mut State| s.hex.select_open = Some(edit_key.clone()))
             }))
@@ -1989,12 +1990,17 @@ fn setting_row(
                 let open = can && h.select_open.as_deref() == Some(key.as_str());
                 let (toggle_key, choose_key) = (key.clone(), key.clone());
                 let labels = options.clone();
+                let field_kit = compact.then(|| settings::row_field_kit(k, p));
                 Select::new(format!("hs-sel-{key}"), &options)
                     .label(name)
                     .current(current)
                     .placeholder("Not set")
                     .appearance(SelectAppearance::Field)
-                    .width(220.0)
+                    .width(if compact {
+                        settings::short_select_width(s, 220.0)
+                    } else {
+                        220.0
+                    })
                     .disabled(!can)
                     .open(open)
                     .on_toggle(move |s: &mut State| {
@@ -2011,7 +2017,7 @@ fn setting_row(
                             s.hex_choose(&choose_key, &setting_text(&choices[index]));
                         }
                     })
-                    .build(k, layer)
+                    .build(field_kit.as_ref().unwrap_or(k), layer)
             }
             _ => {
                 let empty = TextEdit::default();
@@ -2021,7 +2027,7 @@ fn setting_row(
                 let input = TextInput::new(draft)
                     .plain()
                     .label(name)
-                    .height(32.0)
+                    .height(if compact { 30.0 } else { 32.0 })
                     .disabled(!can)
                     .on_edit(move |s: &mut State| s.hex.draft_mut(&key))
                     .on_submit(move |s: &mut State, _| s.hex_commit(&submit_key))
@@ -2036,7 +2042,7 @@ fn setting_row(
                     .build(k)
                     .key(format!("hs-in-{}", st.key))
                     .border(1.0, if draft.focused { p.accent } else { p.line })
-                    .radius(8.0)
+                    .radius(if compact { 7.0 } else { 8.0 })
                     .fill(p.card)
                     .grow(1.0)
                     .min_w(120.0);
@@ -2044,6 +2050,8 @@ fn setting_row(
                 if dirty && can {
                     r = r.child(
                         crate::ui::widgets::action("Save", p)
+                            .px(if compact { 10.0 } else { 12.0 })
+                            .radius(if compact { 7.0 } else { 8.0 })
                             .key(format!("hs-save-{}", st.key))
                             .on_press(move |s: &mut State| s.hex_commit(&save_key)),
                     );
@@ -2052,16 +2060,29 @@ fn setting_row(
             }
         }
     };
-    row()
+    let (shell, tile, control) = if compact {
+        let has_help = !st.about.is_empty()
+            || !st.writable
+            || st.available == Some(false)
+            || h.row_errors.contains_key(&st.key)
+            || h.busy_keys.contains(&st.key);
+        (
+            crate::ui::cards::settings_row(has_help),
+            crate::ui::cards::settings_tile(settings::row_icon(&st.key), p),
+            settings::row_control(s, control),
+        )
+    } else {
+        (
+            crate::ui::cards::row_shell().flex_wrap(),
+            settings::icon_tile(settings::row_icon(&st.key), p),
+            control,
+        )
+    };
+    shell
         .key(format!("hs-{}", st.key))
-        .w_full()
-        .flex_wrap()
-        .items_center()
-        .gaps(12.0, 10.0)
-        .child(settings::icon_tile(settings::row_icon(&st.key), p))
+        .child(tile)
         .child(text)
         .child(control)
-        .padding(14.0)
         .fill(settings::highlight(s, &format!("hs-{}", st.key), p))
 }
 
