@@ -302,16 +302,15 @@ type BTreeFiles = std::collections::BTreeMap<PathBuf, Vec<u8>>;
 fn status(app: &mut App, phase: &str) -> Value {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
-        let value = app.request(json!({"op":"status"}));
+        let value = app.request(json!({"op":"pairing-status"}));
         if value["phase"] == phase {
             return value;
         }
         assert!(
             value["phase"] != "failed",
-            "pairing failed at {} ({}) for {}",
+            "pairing failed at {} ({}) while waiting for {phase}",
             value["stage"].as_str().unwrap_or("unknown"),
-            value["category"].as_str().unwrap_or("unknown"),
-            value["device"].as_str().unwrap_or("unknown")
+            value["category"].as_str().unwrap_or("unknown")
         );
         assert!(
             Instant::now() < deadline,
@@ -1155,6 +1154,38 @@ fn headless_relay_refuses_migration_before_ready_on_linux() {
             "{point}"
         );
     }
+}
+
+#[cfg(windows)]
+#[test]
+fn pairing_status_remains_available_while_the_mode_lock_is_held() {
+    use std::os::windows::fs::OpenOptionsExt;
+
+    common::isolate();
+    let parent = std::env::temp_dir().join("sidenote-relay-preview");
+    std::fs::create_dir_all(&parent).unwrap();
+    let fixture = tempfile::tempdir_in(parent).unwrap();
+    let root = fixture.path();
+    synthetic_root(root, "Synthetic A", "a", "");
+    let mut app = App::start(root);
+
+    let held = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .share_mode(0)
+        .open(root.join("local/relay/mode.lock"))
+        .unwrap();
+    assert_eq!(
+        status(&mut app, "idle"),
+        json!({"phase":"idle","stage":null,"category":null})
+    );
+    app.rejected(json!({"op":"status"}));
+    drop(held);
+    assert_eq!(
+        app.request(json!({"op":"status"}))["devices"],
+        json!(["Synthetic A"])
+    );
+    app.stop();
 }
 
 #[cfg(windows)]
