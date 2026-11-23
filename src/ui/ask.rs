@@ -137,6 +137,7 @@ fn message(s: &State, k: &Kit, i: usize, m: &Message, p: Palette) -> El {
             Transition::opacity()
         })
         .child(body)
+        .children((!user && m.stopped).then(|| roles::META.wrap("Stopped", p.faint).mt(4.0)))
         .children((!user).then(|| answer_label(s, m)).flatten().map(|label| {
             roles::META
                 .wrap(label, p.faint)
