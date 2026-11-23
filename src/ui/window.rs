@@ -228,7 +228,10 @@ pub(super) mod meeting_icon {
         // Maximizing activates the window. Wait until it already has focus.
         let defer = maximized && unsafe { GetForegroundWindow() } != saved.hwnd;
         MAXIMIZE_ON_FOCUS.set(defer.then_some(original));
-        if !maximized || defer {
+        if original.showCmd == SW_SHOWMINIMIZED as u32 {
+            // It was minimized before the icon opened it: put it back minimized.
+            original.showCmd = SW_SHOWMINNOACTIVE as u32;
+        } else if !maximized || defer {
             original.showCmd = SW_SHOWNOACTIVATE as u32;
         }
         unsafe { SetWindowPlacement(saved.hwnd, &original) };
