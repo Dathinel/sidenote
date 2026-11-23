@@ -3388,16 +3388,15 @@ fn task_panel(s: &State, k: &Kit, t: &TaskItem, p: Palette, layer: &mut Vec<El>)
                     }),
                 )
         }));
-    // The draft still has Save and Cancel. Row actions require the live task.
-    if s.live_panel_task().is_none() {
-        return (body, el());
+    let live = s.live_panel_task().is_some();
+    if live {
+        body = body.child(detail_property(
+            "Status",
+            &super::icons::CIRCLE,
+            task_status_control(s, k, t, p, layer),
+            p,
+        ));
     }
-    body = body.child(detail_property(
-        "Status",
-        &super::icons::CIRCLE,
-        task_status_control(s, k, t, p, layer),
-        p,
-    ));
     if let Some(msg) = &tasks.ui.error {
         body = body.child(roles::SMALL.medium().wrap(msg, p.warn).role("alert"));
     }
@@ -3407,6 +3406,9 @@ fn task_panel(s: &State, k: &Kit, t: &TaskItem, p: Palette, layer: &mut Vec<El>)
                 s.discard_task();
             }),
         );
+    }
+    if !live {
+        return (body, el());
     }
     let due = if tasks.ui.due_open {
         col()
@@ -4640,6 +4642,14 @@ mod tests {
         assert!(rt.find("pdone").is_none());
         let overrides = rt.state.tasks.store.load_overrides().unwrap();
         assert!(!overrides.tasks.contains_key(MEETING));
+
+        tap_task_control(&mut rt, "task-discard");
+        assert!(rt.state.tasks.panel.is_none());
+        assert!(!rt.state.tasks.edit_failed);
+        assert!(rt.state.tasks.inputs.title.text.is_empty());
+        assert!(rt.find("tasks-notice-dismiss").is_none());
+        tap_task_control(&mut rt, &format!("ttask-{MEETING}-0"));
+        assert_eq!(rt.state.panel_task().unwrap().stable_id, "neighbor");
     }
 
     #[test]
