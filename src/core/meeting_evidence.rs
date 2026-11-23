@@ -75,6 +75,18 @@ fn discover(root: &Path, status: &Value) -> Option<PathBuf> {
     let first = found.next()?;
     found.next().is_none().then_some(first)
 }
+fn evidence_claim(meeting: &Path) -> io::Result<Option<fs::File>> {
+    let id = meeting
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or(io::ErrorKind::InvalidInput)?;
+    let state = meeting
+        .ancestors()
+        .nth(3)
+        .ok_or(io::ErrorKind::InvalidInput)?;
+    super::meeting_delete::claim_write(state, id)
+}
+
 struct Active {
     source: PathBuf,
     last_lengths: [u64; 2],
@@ -130,9 +142,9 @@ impl Collector {
         );
         let source = recording.then(|| discover(meetings, status)).flatten();
         if let Some(source) = source {
-            if self.active.as_ref().is_some_and(|a| a.source != source) {
-                let previous = self.active.take().unwrap();
+            if let Some(previous) = self.active.as_ref().filter(|a| a.source != source) {
                 self.collect_with_limit(&previous.source, true, upload)?;
+                self.active = None;
             }
             self.active.get_or_insert(Active {
                 source,
@@ -147,6 +159,10 @@ impl Collector {
         let dest = self
             .root
             .join(source.file_name().ok_or(io::ErrorKind::InvalidInput)?);
+        let Some(_claim) = evidence_claim(&dest)? else {
+            self.active = None;
+            return Ok(());
+        };
         fs::create_dir_all(&dest)?;
         if !dest.join("session.json").exists() {
             store_io::write(
@@ -156,7 +172,7 @@ impl Collector {
         }
         if recording {
             sample_lag(&source, &dest, status["elapsed"].as_u64())?;
-            return self.collect_with_limit(&source, false, upload);
+            return self.collect_claimed(&source, false, upload);
         }
         if !matches!(
             status["meeting_state"].as_str(),
@@ -174,7 +190,7 @@ impl Collector {
         active.last_lengths = lengths;
         // Status can turn idle before the writer finalizes. Wait for two stable polls.
         if active.stable >= 2 {
-            self.collect_with_limit(&source, true, upload)?;
+            self.collect_claimed(&source, true, upload)?;
             self.active = None;
         }
         Ok(())
@@ -185,6 +201,16 @@ impl Collector {
     }
 
     fn collect_with_limit(&self, source: &Path, stopped: bool, uploading: bool) -> io::Result<()> {
+        let dest = self
+            .root
+            .join(source.file_name().ok_or(io::ErrorKind::InvalidInput)?);
+        let Some(_claim) = evidence_claim(&dest)? else {
+            return Ok(());
+        };
+        self.collect_claimed(source, stopped, uploading)
+    }
+
+    fn collect_claimed(&self, source: &Path, stopped: bool, uploading: bool) -> io::Result<()> {
         let dest = self
             .root
             .join(source.file_name().ok_or(io::ErrorKind::InvalidInput)?);
@@ -414,6 +440,9 @@ fn upload_windows(
             .and_then(|n| n.to_str())
             .filter(|id| valid_id(id))
         else {
+            continue;
+        };
+        let Some(_claim) = evidence_claim(&folder)? else {
             continue;
         };
         let pending: Vec<_> = jobs(&folder)?
@@ -729,11 +758,34 @@ fn start_worker(root: PathBuf) -> std::thread::JoinHandle<()> {
 }
 fn drain(
     root: &Path,
+    transcribe: impl FnMut(&str, &str, &[u8]) -> io::Result<Value>,
+) -> io::Result<()> {
+    drain_pending(root, pending(root)?, transcribe)
+}
+
+fn drain_pending(
+    root: &Path,
+    pending: Vec<(PathBuf, Job)>,
     mut transcribe: impl FnMut(&str, &str, &[u8]) -> io::Result<Value>,
 ) -> io::Result<()> {
-    let pending = pending(root)?;
     let backlog = pending.len();
-    let batch: Vec<_> = pending.into_iter().take(4).collect();
+    let mut claims = std::collections::BTreeMap::new();
+    let mut batch = Vec::new();
+    for (dir, job) in pending {
+        let meeting = dir
+            .ancestors()
+            .find(|p| p.parent() == Some(root))
+            .ok_or(io::ErrorKind::InvalidInput)?;
+        if let std::collections::btree_map::Entry::Vacant(slot) = claims.entry(meeting.to_owned()) {
+            slot.insert(evidence_claim(meeting)?);
+        }
+        if claims[meeting].is_some() && dir.is_dir() {
+            batch.push((dir, job));
+            if batch.len() == 4 {
+                break;
+            }
+        }
+    }
     let mut times = Vec::new();
     for (dir, j) in &batch {
         let path = dir.join("timing-start.json");
@@ -915,6 +967,9 @@ fn post_audio(model: &str, language: &str, audio: &[u8]) -> io::Result<Value> {
     Ok(value)
 }
 fn summary(meeting: &Path) -> io::Result<()> {
+    let Some(_claim) = evidence_claim(meeting)? else {
+        return Ok(());
+    };
     if !meeting.join("collection.json").exists() || meeting.join("summary.json").exists() {
         return Ok(());
     }
@@ -1054,6 +1109,79 @@ mod tests {
         summary(&dest).unwrap();
         assert!(dest.join("summary.json").exists());
     }
+    #[test]
+    fn recycled_evidence_cannot_be_published_from_a_stale_batch() {
+        use crate::core::meeting_delete::{Eligibility, Storage};
+        let temp = tempfile::tempdir().unwrap();
+        let meetings = temp.path().join("meetings");
+        let source = meetings.join("100-1");
+        let state = temp.path().join("state");
+        fs::create_dir_all(&source).unwrap();
+        fs::create_dir(&state).unwrap();
+        fs::write(source.join("manifest.json"), b"{}").unwrap();
+        audio(&source.join("system.wav"), 1);
+        let collector = Collector::new(&state);
+        collector.collect(&source, true).unwrap();
+        let queued = pending(&collector.root).unwrap();
+        let staged = queued[0].0.clone();
+        let before = fs::read(staged.join("audio.wav")).unwrap();
+        let store = Storage::new(&meetings, &state).unwrap();
+        let id = store
+            .delete(
+                "100-1",
+                "Synthetic".into(),
+                1,
+                |_| Ok(Eligibility::Ready),
+                |_| Ok(()),
+            )
+            .unwrap();
+        drain_pending(&collector.root, queued, |_, _, _| {
+            panic!("stale evidence was submitted")
+        })
+        .unwrap();
+        collector.collect(&source, true).unwrap();
+        assert!(!collector.root.join("100-1").exists());
+        store.restore(&id).unwrap();
+        assert_eq!(fs::read(staged.join("audio.wav")).unwrap(), before);
+    }
+
+    #[test]
+    fn source_switch_retries_final_tail_after_a_busy_claim() {
+        let temp = tempfile::tempdir().unwrap();
+        let meetings = temp.path().join("meetings");
+        let first = meetings.join("100-1");
+        fs::create_dir_all(&first).unwrap();
+        fs::create_dir(meetings.join("100-2")).unwrap();
+        audio(&first.join("system.wav"), 1);
+        let mut collector = Collector::new(temp.path());
+        let running = |id| json!({"meeting_state":"recording","id":id});
+        collector
+            .capture(&running("100-1"), &meetings, false)
+            .unwrap();
+
+        let held = crate::core::meeting_delete::writer_claim(temp.path(), "100-1").unwrap();
+        let dest = collector.root.join("100-1");
+        assert!(
+            collector
+                .capture(&running("100-2"), &meetings, false)
+                .is_err()
+        );
+        assert!(!dest.join("collection.json").exists());
+        drop(held);
+
+        collector
+            .capture(&running("100-2"), &meetings, false)
+            .unwrap();
+        assert!(dest.join("collection.json").is_file());
+        let tail = jobs(&dest).unwrap();
+        assert_eq!(tail.len(), 1);
+        assert_eq!((tail[0].1.start, tail[0].1.end), (0, RATE));
+        assert_eq!(
+            collector.active.as_ref().unwrap().source,
+            meetings.join("100-2")
+        );
+    }
+
     #[test]
     fn coverage_reader_stops_at_header_newline() {
         let bytes = b"{\"covered_ms\":456}\nprivate-text-must-not-be-read";

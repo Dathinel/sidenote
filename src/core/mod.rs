@@ -17,6 +17,7 @@ pub(crate) mod failure;
 pub mod growing_wav;
 pub(crate) mod idle_pass;
 pub mod lid;
+pub mod meeting_delete;
 pub(crate) mod meeting_evidence;
 pub mod meeting_job;
 pub mod meeting_parts;

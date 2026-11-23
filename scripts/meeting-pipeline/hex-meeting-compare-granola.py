@@ -1,4 +1,5 @@
 from pathlib import Path
+import runpy
 import argparse, csv, datetime as dt, difflib, json, os, re, shutil, subprocess, sys, time, tempfile
 
 ROOT = Path(os.environ['APPDATA']) / 'hex' / 'meetings'
@@ -131,6 +132,10 @@ def save_lessons(mid, lessons):
     path.write_text(text,encoding='utf-8')
 
 
+guarded_meeting = runpy.run_path(Path(__file__).with_name("hex-pipeline-run.py"))["guarded_meeting"]
+
+
+@guarded_meeting
 def compare(folder, rows, rules):
     if (folder/'granola-compare.json').exists() or (folder/'granola-compare.md').exists(): raise FileExistsError('Comparison already exists; preserve it')
     manifest=json.loads((folder/'manifest.json').read_text(encoding='utf-8-sig'))

@@ -14,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+import runpy
 
 MEETINGS = Path(os.environ["APPDATA"]) / "hex" / "meetings"
 APP = Path(os.environ["APPDATA"]) / "hex-meetings"
@@ -61,6 +62,10 @@ def known():
         return {"projects": [], "aliases": {}}
 
 
+guarded_meeting = runpy.run_path(Path(__file__).with_name("hex-pipeline-run.py"))["guarded_meeting"]
+
+
+@guarded_meeting
 def classify(folder, force=False):
     folder = Path(folder)
     out = folder / "tasks.json"
