@@ -1413,6 +1413,7 @@ mod tests {
         enqueues.extend(a.saved_recovery_request());
         assert_eq!(enqueues, [(id, Request::UseCodex)]);
     }
+    // Both tests write to the same isolated config.
     static MODEL_SAVES: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn other_model_editor(draft: &str) -> (rune::Runtime<State>, usize) {
@@ -1420,13 +1421,14 @@ mod tests {
         let mut s = State::new();
         let index = HELPERS.iter().position(|h| *h == Helper::Claude).unwrap();
         s.ai_notes.found = vec![(Helper::Claude, true)];
-        s.ai_notes.settings = Some(NotesSettings {
+        let settings = NotesSettings {
             engine: "app".into(),
             helper: Some(Helper::Claude),
             model: "synthetic-saved".into(),
-            enabled_at_ms: Some(1),
             ..NotesSettings::default()
-        });
+        };
+        notes::save_settings(s.config.notes.as_ref().unwrap(), &settings).unwrap();
+        s.ai_notes.settings = Some(notes::settings().unwrap());
         s.ai_notes.models[index] = TextEdit::new(draft);
         s.ai_notes.other_model = true;
         let mut rt = rune::Runtime::new(
@@ -1456,7 +1458,9 @@ mod tests {
 
     #[test]
     fn a_failed_model_save_keeps_what_was_typed_and_shows_the_error() {
-        let _guard = MODEL_SAVES.lock().unwrap();
+        let _guard = MODEL_SAVES
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let invalid = "synthetic-\tmodel";
         let failure = "Could not save Meeting summary settings. Your previous choice was kept.";
         let (mut rt, index) = other_model_editor(invalid);
@@ -1491,7 +1495,9 @@ mod tests {
 
     #[test]
     fn a_model_save_keeps_edits_typed_before_completion() {
-        let _guard = MODEL_SAVES.lock().unwrap();
+        let _guard = MODEL_SAVES
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let (mut rt, index) = other_model_editor("");
         let click = |rt: &mut rune::Runtime<State>, key, t| {
             let (x, y) = rt.find(key).unwrap();
