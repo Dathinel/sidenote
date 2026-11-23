@@ -5,7 +5,7 @@ use crate::ui::{
     widgets::{self, HelpHint},
 };
 use rune::{Color, KeyEvent};
-use rune_kit::{Menu, MenuItem, Placement, Popover};
+use rune_kit::{Placement, Popover};
 use sidenote::core::{self, people::Side};
 
 pub fn return_key(origin: &str) -> String {
@@ -59,26 +59,46 @@ impl State {
     }
 }
 
-pub fn menu_items(s: &State, m: &Meeting, menu: Menu) -> Menu {
+pub fn menu_items(s: &State, m: &Meeting, menu: El, p: Palette) -> El {
+    use crate::ui::widgets::{menu_row, menu_separator};
+    let group = |label| {
+        row()
+            .h(28.0)
+            .px(8.0)
+            .items_center()
+            .child(roles::META.line(label, p.faint))
+    };
+    let item = |name| menu_row(name, p, None, None, None);
+    let choice_item = |name, checked| {
+        item(name)
+            .role("menuitemcheckbox")
+            .checked(checked)
+            .focus_selected(checked)
+            .child(
+                icons::draw(&icons::CHECK, 16.0, p.soft)
+                    .opacity(if checked { 1.0 } else { 0.0 })
+                    .a11y_hidden(),
+            )
+    };
     let id = m.id.clone();
     let mut out = menu
-        .separator()
-        .item(
-            MenuItem::new("Ask model and effort").on_select(|s: &mut State| {
+        .child(menu_separator(p))
+        .child(
+            item("Ask model and effort").on_press(|s: &mut State| {
                 s.more_menu = None;
                 s.open_hex();
                 s.hex.section = crate::ui::hex::Section::Connect;
                 crate::ui::scene_scroll(s, "ask-agent-row");
             }),
         )
-        .item(MenuItem::new("Project").on_select({
+        .child(item("Project").on_press({
             let id = m.id.clone();
             move |s: &mut State| {
                 s.more_menu = None;
                 s.project_menu = Some(id.clone());
             }
         }))
-        .item(MenuItem::new("Memory from this meeting").on_select({
+        .child(item("Memory from this meeting").on_press({
             let id = m.id.clone();
             move |s: &mut State| {
                 s.more_menu = None;
@@ -87,67 +107,69 @@ pub fn menu_items(s: &State, m: &Meeting, menu: Menu) -> Menu {
                 s.memory.settle_meeting = Some(id.clone());
             }
         }))
-        .group_label("View")
-        .item(
-            MenuItem::new("Summary")
-                .checked(main_tab(s, m) == Tab::Summary)
-                .on_select(|s: &mut State| {
+        .child(group("View"))
+        .child(
+            choice_item("Summary", main_tab(s, m) == Tab::Summary)
+                .on_press(|s: &mut State| {
                     s.set_meeting_tab(Tab::Summary);
                     s.more_menu = None;
                 }),
         )
-        .item(
-            MenuItem::new("Your notes")
+        .child(
+            choice_item("Your notes", main_tab(s, m) == Tab::Notes)
                 .disabled(m.notes.is_empty())
-                .checked(main_tab(s, m) == Tab::Notes)
-                .on_select(|s: &mut State| {
+                .focusable(!m.notes.is_empty())
+                .layer_opacity(if m.notes.is_empty() { 0.5 } else { 1.0 })
+                .on_press(|s: &mut State| {
                     s.set_meeting_tab(Tab::Notes);
                     s.more_menu = None;
                 }),
         )
-        .separator()
-        .group_label("Layout")
-        .item(
-            MenuItem::new("Reading")
-                .checked(!s.meeting_ui.tabs)
-                .on_select(|s: &mut State| s.set_meeting_layout(false)),
+        .child(menu_separator(p))
+        .child(group("Layout"))
+        .child(
+            choice_item("Reading", !s.meeting_ui.tabs)
+                .on_press(|s: &mut State| s.set_meeting_layout(false)),
         )
-        .item(
-            MenuItem::new("Tabs")
-                .checked(s.meeting_ui.tabs)
-                .on_select(|s: &mut State| s.set_meeting_layout(true)),
+        .child(
+            choice_item("Tabs", s.meeting_ui.tabs)
+                .on_press(|s: &mut State| s.set_meeting_layout(true)),
         )
-        .separator()
-        .group_label("Next summary uses");
+        .child(menu_separator(p))
+        .child(group("Next summary uses"));
     let picked = picked_template(s, m);
     for (title, choice, enabled) in [
         ("Standard", "standard", true),
         ("Your instructions", "custom", s.meeting_ui.custom),
     ] {
         let id = id.clone();
-        out = out.item(
-            MenuItem::new(title)
-                .checked(choice == picked)
+        out = out.child(
+            choice_item(title, choice == picked)
                 .disabled(!enabled)
-                .on_select(move |s: &mut State| s.choose_summary_template(&id, choice)),
+                .focusable(enabled)
+                .layer_opacity(if enabled { 1.0 } else { 0.5 })
+                .on_press(move |s: &mut State| s.choose_summary_template(&id, choice)),
         );
     }
-    out = out.item(
-        MenuItem::new("Edit summary prompt").on_select(|s: &mut State| {
+    out = out.child(
+        item("Edit summary prompt").on_press(|s: &mut State| {
             s.more_menu = None;
             s.open_hex();
             s.hex.section = crate::ui::hex::Section::PromptLibrary;
             crate::ui::scene_scroll(s, "agent-instructions");
         }),
     );
-    out=out.item(MenuItem::new("Write an email").on_select(|s:&mut State| {
-        s.more_menu=None;s.question=TextEdit::new("Draft a short email about this meeting. Use only what was discussed and keep it ready to copy.");
+    out = out.child(item("Write an email").on_press(|s: &mut State| {
+        s.more_menu = None;
+        s.question = TextEdit::new(
+            "Draft a short email about this meeting. Use only what was discussed and keep it ready to copy.",
+        );
         s.question.focused = true;
     }));
     if !m.lines.is_empty() {
-        out = out.item(
-            MenuItem::new("Copy transcript")
-                .on_select_tx(move |s: &mut State, tx| s.copy_transcript(&id, tx)),
+        out = out.child(
+            item("Copy transcript")
+                .on_press_tx(move |s: &mut State, tx| s.copy_transcript(&id, tx)),
         );
     }
     out
