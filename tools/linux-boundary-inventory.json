@@ -197,7 +197,7 @@
 
   "src/core/meeting_router/vad/linux_tests.rs": "b94fbe1adb34b23d921a94f6d548bfe6dbda81170dd2f16a60b572c69d0c4267",
 
-  "src/core/meeting_watch.rs": "5ad033c42efbae183f84998f5571a7bab80dcef607e41d5f9fbb99d3760b09b2",
+  "src/core/meeting_watch.rs": "511b1d2faba6e513a3739bebc49d9f2251e4fbb4ee829eaa328e0313d16c72ce",
 
   "src/core/meetings.rs": "bb81f7cccfe21cc248bf285b6da9a5705ccb57cdc9c1533cc80e955060c94d02",
 
