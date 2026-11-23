@@ -354,6 +354,7 @@ fn chip_with(
         }
     }
     let menu = menu.build(k, layer).min_w(0.0);
+    let menu = if stacked { menu.w_full() } else { menu };
     let mut wrap = if stacked {
         col().items_start()
     } else {
