@@ -1209,7 +1209,12 @@ fn old_and_completed_answers_show_no_stop_label() {
     let answer = saved.messages.last().unwrap();
     assert_eq!(answer.text, "A finished answer.");
     assert!(!answer.stopped);
-    assert!(serde_json::to_value(answer).unwrap().get("stopped").is_none());
+    assert!(
+        serde_json::to_value(answer)
+            .unwrap()
+            .get("stopped")
+            .is_none()
+    );
     assert!(rt.find("msg-2").is_some());
     assert_eq!(stopped_label_count(&rt), 0);
 }
