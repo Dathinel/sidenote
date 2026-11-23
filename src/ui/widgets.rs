@@ -300,6 +300,16 @@ pub fn button(name: impl Into<String>, key: &str, role: ButtonRole, p: Palette) 
     button_state(name.into(), key, role, rune_kit::State::Rest, p)
 }
 
+pub fn row_button(name: impl Into<String>, key: &str, role: ButtonRole, p: Palette) -> El {
+    button(name, key, role, p).h(28.0).px(10.0).radius(7.0)
+}
+
+pub fn row_action(name: impl Into<String>, key: &str, p: Palette) -> El {
+    let name = name.into();
+    let role = button_role(&name, false);
+    row_button(name, key, role, p)
+}
+
 fn button_state(
     name: String,
     key: &str,

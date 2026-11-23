@@ -1,5 +1,6 @@
 //! AI notes controls. Disk access and helper calls return through one worker mailbox.
 use super::{Event, State, area::button, roles, theme::Palette};
+use super::{cards, hex::settings, widgets::row_action};
 use rune::{El, TextEdit, col, row};
 use rune_kit::{Kit, Switch, TextInput};
 use sidenote::core::{
@@ -707,6 +708,7 @@ pub fn summary_model(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, extras
         Some(current),
         other || custom,
     )
+    .width(settings::short_select_width(s, 220.0))
     .disabled(s.ai_notes.pending.is_some())
     .open(s.ai_notes.model_open)
     .on_toggle(|s: &mut State| s.ai_notes.model_open = !s.ai_notes.model_open)
@@ -720,7 +722,7 @@ pub fn summary_model(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, extras
             s.choose_notes_helper(index);
         }
     })
-    .build(k, layer);
+    .build(&settings::row_field_kit(k, p), layer);
     let mut control = col().gap(8.0).child(menu);
     if other {
         control = control.child(
@@ -729,13 +731,15 @@ pub fn summary_model(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, extras
                 .gap(8.0)
                 .child(
                     field(&s.ai_notes.models[index], "Other summary model")
+                        .height(30.0)
                         .on_edit(move |s: &mut State| &mut s.ai_notes.models[index])
                         .build(k)
                         .key("notes-model-other")
+                        .radius(7.0)
                         .w(205.0),
                 )
                 .child(
-                    button("Save model", "notes-save-model", p)
+                    row_action("Save model", "notes-save-model", p)
                         .disabled(s.ai_notes.pending.is_some())
                         .on_press(move |s: &mut State| s.choose_notes_helper(index)),
                 ),
@@ -918,13 +922,13 @@ pub fn section(s: &State, k: &Kit, p: Palette, part: Part) -> El {
                 true,
                 p,
             ))
-            .child(super::widgets::hairline(p))
+            .child(cards::settings_divider(p))
             .child(super::hex::settings::setting_row(
                 s,
                 "summary-template",
                 "Summary template",
                 "Edit the instructions used to write meeting summaries.",
-                button("Edit", "summary-template-edit", p)
+                row_action("Edit", "summary-template-edit", p)
                     .label("Edit Meeting summary instructions")
                     .on_press(|s: &mut State| {
                         s.hex.section = super::hex::Section::PromptLibrary;
@@ -950,7 +954,7 @@ pub fn section(s: &State, k: &Kit, p: Palette, part: Part) -> El {
             "notes-privacy",
             "What is sent",
             PRIVACY,
-            button(
+            row_action(
                 if a.privacy_open {
                     "Hide details"
                 } else {
@@ -1007,6 +1011,7 @@ pub fn section(s: &State, k: &Kit, p: Palette, part: Part) -> El {
         }
 
         let mut helper_list = col().w_full();
+        let mut helper_list_empty = true;
         for (index, h) in HELPERS.iter().copied().enumerate() {
             let found = a.found.contains(&(h, true));
             let offered = h.offered();
@@ -1034,18 +1039,14 @@ pub fn section(s: &State, k: &Kit, p: Palette, part: Part) -> El {
                 } else {
                     "Writes your meeting summaries and answers Ask."
                 };
-                let info = col()
-                    .grow(1.0)
-                    .min_w(170.0)
-                    .gap(5.0)
-                    .child(
-                        row()
-                            .flex_wrap()
-                            .gap(8.0)
-                            .child(roles::NAME.wrap(h.name(), p.ink))
-                            .children((index == 0).then(|| roles::META.line("Recommended", p.ink))),
-                    )
-                    .child(roles::SMALL.wrap(help, p.soft))
+                let title = row()
+                    .items_center()
+                    .flex_wrap()
+                    .gap(8.0)
+                    .child(cards::settings_title(h.name(), p))
+                    .children((index == 0).then(|| roles::META.line("Recommended", p.ink)));
+                let info = cards::settings_copy_with_title(title)
+                    .child(roles::META.wrap(help, p.soft))
                     .child(roles::META.wrap(
                         if found {
                             "Detected on this PC. Sign-in has not been checked."
@@ -1063,34 +1064,30 @@ pub fn section(s: &State, k: &Kit, p: Palette, part: Part) -> El {
                         .line("In use", p.ok)
                         .key(format!("notes-use-{index}"))
                 } else if !found {
-                    button("Set up", "notes-install-page", p)
+                    row_action("Set up", "notes-install-page", p)
                         .on_press(|s: &mut State| s.open_notes_install_page())
                 } else {
-                    button(
+                    row_action(
                         format!("Use {}", h.name()),
                         &format!("notes-use-{index}"),
                         p,
                     )
                     .on_press(move |s: &mut State| s.choose_notes_helper(index))
                 };
-                r = row()
+                r = cards::settings_row(true)
                     .key(format!("notes-helper-{index}"))
-                    .w_full()
-                    .flex_wrap()
-                    .gaps(12.0, 10.0)
-                    .items_center()
-                    .padding(14.0)
                     .fill(p.card)
-                    .child(super::hex::settings::icon_tile(
+                    .child(cards::settings_tile(
                         super::hex::settings::row_icon(&format!("notes-helper-{index}")),
                         p,
                     ))
                     .child(info)
                     .child(action);
-                if index > 0 {
-                    helper_list = helper_list.child(super::widgets::hairline(p));
+                if !helper_list_empty {
+                    helper_list = helper_list.child(cards::settings_divider(p));
                 }
                 helper_list = helper_list.child(r);
+                helper_list_empty = false;
                 if a.switch_confirm == Some(h) {
                     c = c.child(
                         card(p)

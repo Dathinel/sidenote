@@ -1,9 +1,9 @@
 use super::{
     State,
-    hex::settings::{card, setting_row},
+    cards::settings_divider,
+    hex::settings::{card, row_field_kit, setting_row, short_select_width},
     roles,
     theme::Palette,
-    widgets::hairline,
 };
 use rune::{El, TextEdit, col, row};
 use rune_kit::{Kit, Menu, MenuItem, Placement, Select, SelectAppearance, TextInput};
@@ -400,7 +400,7 @@ fn thinking(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, meeting: bool) 
         })
         .current(Some(value.label()))
         .appearance(SelectAppearance::Field)
-        .width(180.0)
+        .width(short_select_width(s, 180.0))
         .open(s.ask_settings.select_open.as_deref() == Some(key))
         .on_toggle(move |s: &mut State| {
             s.ask_settings.select_open = if s.ask_settings.select_open.as_deref() == Some(key) {
@@ -470,6 +470,7 @@ fn model_choice(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
         current.as_deref(),
         other,
     )
+    .width(short_select_width(s, 220.0))
     .disabled(runner.is_none())
     .open(s.ask_settings.select_open.as_deref() == Some("ask-settings-model"))
     .on_toggle(|s: &mut State| {
@@ -510,7 +511,7 @@ fn model_choice(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
                     TextInput::new(&s.ask_settings.model_input)
                         .label("Other model")
                         .placeholder("Model name")
-                        .height(34.0)
+                        .height(30.0)
                         .on_edit(|s: &mut State| &mut s.ask_settings.model_input)
                         .on_submit(|s: &mut State, _| s.save_ask_model())
                         .build(k)
@@ -518,7 +519,7 @@ fn model_choice(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
                         .w(205.0),
                 )
                 .child(
-                    super::widgets::button(
+                    super::widgets::row_button(
                         "Save",
                         "ask-settings-model-save",
                         super::widgets::ButtonRole::Secondary,
@@ -620,7 +621,7 @@ fn meeting_agent(s: &State, k: &Kit, layer: &mut Vec<El>) -> El {
         .label("Agent during meetings")
         .current(Some(current))
         .appearance(SelectAppearance::Field)
-        .width(220.0)
+        .width(short_select_width(s, 220.0))
         .disabled(options.is_empty())
         .open(open)
         .on_toggle(|s: &mut State| {
@@ -652,6 +653,7 @@ fn meeting_agent(s: &State, k: &Kit, layer: &mut Vec<El>) -> El {
 }
 
 pub fn section(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
+    let k = &row_field_kit(k, p);
     let options: Vec<String> = s
         .runners
         .iter()
@@ -674,7 +676,7 @@ pub fn section(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
             .placeholder("No agent found")
             .disabled(options.is_empty())
             .appearance(SelectAppearance::Field)
-            .width(180.0)
+            .width(short_select_width(s, 180.0))
             .open(s.ask_settings.select_open.as_deref() == Some("ask-agent"))
             .on_toggle(|s: &mut State| {
                 s.ask_settings.select_open =
@@ -706,7 +708,7 @@ pub fn section(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
             true,
             p,
         ))
-        .child(hairline(p))
+        .child(settings_divider(p))
         .child(setting_row(
             s,
             "ask-model-row",
@@ -716,7 +718,7 @@ pub fn section(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
             true,
             p,
         ))
-        .child(hairline(p))
+        .child(settings_divider(p))
         .child(setting_row(
             s,
             "ask-meeting-agent-row",
@@ -726,7 +728,7 @@ pub fn section(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
             true,
             p,
         ))
-        .child(hairline(p))
+        .child(settings_divider(p))
         .child(setting_row(
             s,
             "ask-meeting-thinking-row",
@@ -736,7 +738,7 @@ pub fn section(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
             true,
             p,
         ))
-        .child(hairline(p))
+        .child(settings_divider(p))
         .child(setting_row(
             s,
             "ask-chat-thinking-row",
