@@ -900,6 +900,19 @@ fn capture_page(s: &State, c: &Capture, width: f32, p: Palette, layer: &mut Vec<
     if steps == 0 {
         page = page.child(roles::SMALL.wrap("This capture has no keyframes yet.", p.soft));
     }
+    let missing: Vec<_> = c
+        .data
+        .marks
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| c.frame_for_mark(m).is_none())
+        .collect();
+    if !missing.is_empty() {
+        page = page.child(roles::GROUP.wrap("Marks without a matching frame", p.soft));
+        for (i, mark) in missing {
+            page = page.child(callout(c, i + 1, mark, p));
+        }
+    }
     page
 }
 pub fn pane(s: &State, p: Palette, narrow: bool) -> El {
