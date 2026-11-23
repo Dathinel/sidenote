@@ -8,6 +8,8 @@ use sidenote::core::UiPrefs;
 
 const STRIP: &str = "annotation-filmstrip";
 const THUMB_WIDTH: f32 = 176.0;
+const THUMB_HEIGHT: f32 = 99.0;
+const THUMB_RADIUS: f32 = 6.0;
 
 pub(super) fn view_switch(s: &State, p: Palette) -> El {
     let mut kit = theme::kit(&p);
@@ -90,14 +92,22 @@ pub(super) fn view(s: &State, c: &Capture, width: f32, p: Palette) -> El {
     let mut thumbs = row().gap(10.0).padding(4.0);
     for (i, frame) in c.data.keyframes.iter().enumerate() {
         let selected = index == i;
-        let mut shot = el().size(THUMB_WIDTH, 99.0).clip_rounded(6.0).fill(p.card);
+        let mut shot = el()
+            .size(THUMB_WIDTH, THUMB_HEIGHT)
+            .clip_rounded(THUMB_RADIUS)
+            .fill(p.card);
         if let Some(Ok(image)) = s.annotations.images.get(i) {
             shot = shot.pixels_fit(image.pixels(), SurfaceFit::Fit);
         }
-        shot = shot.outline(
-            if selected { 2.0 } else { 1.0 },
-            0.0,
-            if selected { p.ink } else { p.line },
+        // Paint the border over the image, outside the image's rounded clip.
+        let thumbnail = col().child(shot).child(
+            el().absolute(0.0, 0.0)
+                .size(THUMB_WIDTH, THUMB_HEIGHT)
+                .radius(THUMB_RADIUS)
+                .border(
+                    if selected { 2.0 } else { 1.0 },
+                    if selected { p.ink } else { p.line },
+                ),
         );
         let number = i + 1;
         let timestamp = time(frame.t);
@@ -107,7 +117,7 @@ pub(super) fn view(s: &State, c: &Capture, width: f32, p: Palette) -> El {
                 .label(format!("Step {number}, {timestamp}"))
                 .checked(selected)
                 .focus_ring(2.0, 2.0, p.ink)
-                .child(shot)
+                .child(thumbnail)
                 .child(roles::META.line(
                     format!("{number}{}{timestamp}", roles::DOT),
                     if selected { p.ink } else { p.faint },
