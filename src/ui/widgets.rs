@@ -3,7 +3,10 @@ use super::{
     State, icons, roles,
     theme::{BODY, BODY_LH, Palette},
 };
-use rune::{Color, Cursor, El, Link, LinkPaint, ScrollSpec, Span, TextStyle, col, el, row, text};
+use rune::{
+    Align, Color, Cursor, El, Icon, Key, Link, LinkPaint, ScrollSpec, Side, Span, TextStyle, Transition,
+    col, el, row, text,
+};
 use rune_kit::Kit;
 use sidenote::core::{self, Point};
 
@@ -38,6 +41,119 @@ pub fn chip(s: impl Into<String>, p: Palette) -> El {
 
 pub fn pressable(e: El) -> El {
     e.role("button").focusable(true).cursor(Cursor::Pointer)
+}
+
+pub fn menu_trigger(
+    button: El,
+    open: bool,
+    p: Palette,
+    toggle: impl Fn(&mut State) + Clone + 'static,
+) -> El {
+    button
+        .expanded(open)
+        .focus_ring(1.0, 0.0, p.line)
+        .on_press(toggle.clone())
+        .on_key(move |s, event, tx| {
+            if event.key != Key::Enter || event.mods != rune::Mods::default() {
+                return false;
+            }
+            if !tx.key_repeat() {
+                toggle(s);
+            }
+            true
+        })
+}
+
+pub fn menu_surface(
+    k: &Kit,
+    p: Palette,
+    layer: &mut Vec<El>,
+    rows: El,
+    (key, trigger, side, align, width): (&str, &str, Side, Align, f32),
+    close: fn(&mut State),
+) {
+    let rows = rune_kit::popover::fit_scroll(rows.padding(4.0));
+    let scroll = rune_kit::scroll_bar(k, &format!("{key}-scroll-area"), "scroll", rows)
+        .w_full()
+        .shrink()
+        .min_h(0.0);
+    let origin = rune_motion::Vec2::new(
+        if align == Align::End { 1.0 } else { 0.0 },
+        if side == Side::Top { 1.0 } else { 0.0 },
+    );
+    let frame = col()
+        .key(format!("{key}-menu"))
+        .w(width.clamp(220.0, 300.0))
+        .min_h(0.0)
+        .role("menu")
+        .label(if key == "profile-menu" {
+            "Profile menu"
+        } else {
+            "Actions"
+        })
+        .focus_group()
+        .radius(10.0)
+        .fill(p.raised)
+        .border(1.0, p.line)
+        .child(scroll)
+        .anchored_fit(trigger, side, align, 6.0)
+        .transition(Transition::scale_anchor(0.96, origin).springs(rune_motion::tokens::pair::SNAP))
+        .token_motion(k.motion.overlay)
+        .focus_return(trigger)
+        .modal(true, close);
+    layer.push(rune_kit::scrim(format!("{key}-scrim"), close));
+    layer.push(
+        k.shadow_layers(&k.elevation.floating)
+            .fold(frame, El::box_shadow),
+    );
+}
+
+pub fn menu_separator(p: Palette) -> El {
+    el().h(1.0)
+        .my(4.0)
+        .mx(-4.0)
+        .fill(p.line)
+        .a11y_hidden()
+}
+
+pub fn menu_row(
+    name: impl Into<String>,
+    p: Palette,
+    detail: Option<&str>,
+    icon: Option<&'static Icon>,
+    shortcut: Option<&str>,
+) -> El {
+    let name = name.into();
+    let mut text = col()
+        .grow(1.0)
+        .shrink()
+        .gap(1.0)
+        .a11y_hidden()
+        .child(roles::NAV.line(name.clone(), p.ink).key("label"));
+    let mut entry = row()
+        .role("menuitem")
+        .label(name)
+        .radius(6.0)
+        .px(8.0)
+        .gap(10.0)
+        .items_center()
+        .focusable(true)
+        .no_focus_ring()
+        .focus_highlight(p.chip)
+        .children(icon.map(|glyph| icons::draw(glyph, 16.0, p.soft).a11y_hidden()));
+    if let Some(detail) = detail {
+        text = text.child(roles::META.line(detail, p.faint).key("description"));
+        entry = entry.description(detail).min_h(40.0).py(5.0);
+    } else {
+        entry = entry.h(30.0);
+    }
+    entry = entry.child(text);
+    if let Some(shortcut) = shortcut {
+        entry = entry
+            .shortcut_hint(shortcut)
+            .child(roles::META.line(shortcut, p.faint).a11y_hidden());
+    }
+    entry
 }
 
 #[derive(Clone, Copy)]

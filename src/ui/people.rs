@@ -6,9 +6,9 @@ use super::{
     theme::Palette,
     widgets::{hairline, scroll},
 };
-use crate::ui::widgets::ButtonDisabled;
+use crate::ui::widgets::{ButtonDisabled, menu_row, menu_separator, menu_surface, menu_trigger};
 use rune::{El, TextEdit, col, row};
-use rune_kit::{Kit, Menu, MenuItem, Placement, SegmentedControl, TextInput};
+use rune_kit::{Kit, SegmentedControl, TextInput};
 use sidenote::core::{
     self,
     people::{Person, Side},
@@ -136,19 +136,23 @@ fn person_menu(s: &State, person: &Person, k: &Kit, p: Palette, layer: &mut Vec<
     let key = format!("person-menu-{id}");
     let toggle = key.clone();
     let open = s.more_menu.as_deref() == Some(key.as_str());
+    let trigger_key = format!("person-more-{id}");
     let trigger = super::widgets::pressable(icons::draw(&icons::MORE, 16.0, p.soft).padding(8.0))
-        .key(format!("person-more-{id}"))
+        .key(&trigger_key)
         .label(format!("More actions for {}", person.name))
         .disabled(s.edit_busy)
         .radius(6.0)
-        .hover(p.chip)
-        .on_press(move |s: &mut State| {
-            s.more_menu = if s.more_menu.as_deref() == Some(&toggle) {
-                None
-            } else {
-                Some(toggle.clone())
-            };
-        });
+        .hover(p.chip);
+    let trigger = menu_trigger(trigger, open, p, move |s| {
+        s.more_menu = if s.more_menu.as_deref() == Some(&toggle) {
+            None
+        } else {
+            Some(toggle.clone())
+        };
+    });
+    if !open {
+        return trigger;
+    }
     let email = s
         .companies
         .data
@@ -158,47 +162,52 @@ fn person_menu(s: &State, person: &Person, k: &Kit, p: Palette, layer: &mut Vec<
         .and_then(|l| l.email.clone());
     let name = person.name.clone();
     let edit_name = name.clone();
-    let mut menu = Menu::new(key)
-        .trigger(trigger)
-        .open(open)
-        .placement(Placement::BottomEnd)
-        .min_width(180.0)
-        .on_close(|s: &mut State| s.more_menu = None)
-        .item(
-            MenuItem::new(if email.is_some() {
+    let item = |name| menu_row(name, p, None, None, None);
+    let mut menu = col()
+        .child(
+            item(if email.is_some() {
                 "Edit email"
             } else {
                 "Add email"
             })
-            .on_select(move |s: &mut State| {
+            .on_press(move |s: &mut State| {
                 s.more_menu = None;
                 s.edit_person_company(&name);
             }),
         )
-        .item(
-            MenuItem::new("Edit person").on_select(move |s: &mut State| {
+        .child(
+            item("Edit person").on_press(move |s: &mut State| {
                 s.more_menu = None;
                 s.edit_person_company(&edit_name);
             }),
         );
-    if person.manual_side {
-        let name = person.name.clone();
-        menu = menu.item(
-            MenuItem::new("Reset to automatic").on_select(move |s: &mut State| {
-                s.more_menu = None;
-                s.set_person_side(&name, None);
-            }),
-        );
-    }
     if let Some(email) = email {
-        menu = menu.item(
-            MenuItem::new("Copy email").on_select_tx(move |s: &mut State, tx| {
+        menu = menu.child(
+            item("Copy email").on_press_tx(move |s: &mut State, tx| {
                 s.more_menu = None;
                 tx.copy(email.clone());
             }),
         );
     }
-    menu.build(k, layer)
+    if person.manual_side {
+        let name = person.name.clone();
+        let danger = Palette { ink: p.danger, ..p };
+        menu = menu.child(menu_separator(p)).child(
+            menu_row("Reset to automatic", danger, None, None, None).on_press(move |s: &mut State| {
+                s.more_menu = None;
+                s.set_person_side(&name, None);
+            }),
+        );
+    }
+    menu_surface(
+        k,
+        p,
+        layer,
+        menu,
+        (&key, &trigger_key, rune::Side::Bottom, rune::Align::End, 240.0),
+        |s| s.more_menu = None,
+    );
+    trigger
 }
 
 pub fn heading(compact: bool, affiliation: Option<bool>, p: Palette) -> El {
