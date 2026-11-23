@@ -373,7 +373,7 @@ pub fn parse_transcript(raw: &str) -> Vec<Line> {
             lines.push(Line {
                 seconds: Some(seconds(&at).unwrap_or(0)),
                 at,
-                who: c[5].into(),
+                who: c[5].replace('_', " "),
                 language: c[6].into(),
                 text: c[7].trim().into(),
             });

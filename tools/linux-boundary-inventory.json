@@ -199,7 +199,7 @@
 
   "src/core/meeting_watch.rs": "511b1d2faba6e513a3739bebc49d9f2251e4fbb4ee829eaa328e0313d16c72ce",
 
-  "src/core/meetings.rs": "bb81f7cccfe21cc248bf285b6da9a5705ccb57cdc9c1533cc80e955060c94d02",
+  "src/core/meetings.rs": "80b8553850998c1395d62e765f9b835b1b01a8838f508e82709ed5358fb06ac2",
 
   "src/core/memory.rs": "910bd5ad44d4c80c3ed8cd45e3d78ea141d4d599a3ec78e53c4d15e7b114b23e",
 
@@ -247,7 +247,7 @@
 
   "src/core/notes/tests/translation/qualification.rs": "6c26011e370ad5111e4170d972d1fa83e1ce3158bfff4b6fd8cc81504428a49b",
 
-  "src/core/notes/transcript.rs": "2e608dbf09e38ecb72b0dac0c99970cac9f684ff8c66a40c1be5b2503654bcc7",
+  "src/core/notes/transcript.rs": "1da04d5612243a2407f6db22b42359ea2d9b1404eba591e80658556ceefd7d67",
 
   "src/core/people.rs": "8ac2f1d902ee71a380d1473de1b5d1c91a56415db2d478af0dac8af270cdfc6a",
 
