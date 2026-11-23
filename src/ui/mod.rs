@@ -397,6 +397,8 @@ impl State {
         match result {
             Ok(config) => {
                 let people_enabled = config.features.people && !self.config.features.people;
+                let annotations_enabled =
+                    config.features.annotations && !self.config.features.annotations;
                 let projects_changed = config.features.projects != self.config.features.projects;
                 self.config = config;
                 self.feature_error = None;
@@ -446,6 +448,9 @@ impl State {
                         &self.config,
                     );
                     self.companies = companies::CompanyUi::load(root);
+                }
+                if annotations_enabled {
+                    self.load_annotation_options();
                 }
                 if self.config.features.enabled(core::Feature::DailyCheck) {
                     self.check.refresh();

@@ -389,11 +389,11 @@
 
   "src/ui/ai_notes.rs": "4f070e124e1f704230aa1f3348b0d5050f9ed795a13320175726fe5e1de039af",
 
-  "src/ui/annotations.rs": "d89f61da3262022e1b0e4db73bf7d57586ea7a657e57c0851ea3ec54cccc7f3b",
+  "src/ui/annotations.rs": "e8913a6e98da0bca092852e5f3b5ff0db4eb1237630594106f084470d7bb146e",
 
   "src/ui/annotations/notebooks.rs": "b01a26b59d7c308ea9b6b071ff7c93afab8271d55ddfb4fe616c76411616645d",
 
-  "src/ui/annotations/workflow.rs": "8ced2a99d89386732058f5defc0a5838ec4fd0c6e5202745a1d0f6f161bb0ecd",
+  "src/ui/annotations/workflow.rs": "9a115fcd00254b85c056abebb06f4ed3ed984145a979993c243a672fdde77c04",
 
   "src/ui/area.rs": "3ae9616e2b324dc17e6837ff65fc4d6db5e61a420eae3b823de4730720a4cb55",
 
@@ -439,7 +439,7 @@
 
   "src/ui/memory/settled.rs": "9d0915dfa235083870103a6872b2fc6e23c267328989d288b2299e1e0e460b58",
 
-  "src/ui/mod.rs": "e0f9e390c331d546e19793b56aecd308579c68dc2e289b9d875f9f6abafac6c4",
+  "src/ui/mod.rs": "31883fb9315a79c8fbf337ad00533ff4d86b9d4507212144fbdb1d8876de66f8",
 
   "src/ui/models.rs": "eb6ea41c084af0bdb6ec17cdf7a2fad8e4f812d859351e73b05fac2ccbd703f9",
 
