@@ -480,6 +480,11 @@ fn meeting_model_hint_reveals_on_hover_and_keyboard_focus() {
         return;
     }
     let mut rt = page();
+    rt.update(|s, _| {
+        scene_agents(s, ALL_AGENTS);
+        s.ask_open = true;
+    });
+    rt.frame(0.0);
     let hint = "help-hint-model";
     let tip = "help-hint-model-tip";
     assert_eq!(rt.presented(tip).unwrap().1, 0.0);
@@ -1097,6 +1102,11 @@ fn the_model_picker_shows_on_a_meeting_the_live_screen_and_a_new_chat() {
     let mut rt = page();
     rt.update(|s, _| scene_agents(s, ALL_AGENTS));
     rt.frame(0.0);
+    assert!(rt.find("ask-model").is_none());
+    assert!(rt.find("ask-suggestions").is_none());
+    rt.update(|s, _| s.ask_open = true);
+    rt.frame(0.0);
+    assert!(rt.find("ask-suggestions").is_some());
     assert!(
         rt.state.selected.is_some() && rt.find("ask-model").is_some(),
         "meeting"
@@ -1520,13 +1530,16 @@ fn retiring_memory_shares_the_wait_between_two_contended_locks() {
     );
 }
 
-/// The Ask pill and the suggestion chip start where the notes column starts. The thread above
-/// keeps the 16 point gutter the 390 wide test checks; the bar does not follow it.
+/// The Ask dock starts at the notes edge and aligns the suggestions inside the panel.
 fn the_bar_starts_at_the_notes_column(name: &str, size: (f32, f32)) {
     if in_parent(name) {
         return;
     }
     let mut rt = page_at(size);
+    rt.update(|s, _| {
+        scene_agents(s, ALL_AGENTS);
+        s.ask_open = true;
+    });
     rt.frame(0.0);
     rt.settle_all();
     rt.frame(0.0);
@@ -1536,9 +1549,13 @@ fn the_bar_starts_at_the_notes_column(name: &str, size: (f32, f32)) {
             .0
     };
     let notes = rect("meeting-view");
-    let (chip, pill) = (rect("suggest-0"), rect("ask-pill"));
-    assert_eq!(chip[0], notes[0], "the chip starts at the notes column");
-    assert_eq!(pill[0], notes[0], "the pill starts at the notes column");
+    let (dock, chip, pill) = (
+        rect("meeting-bottom-bar"),
+        rect("suggest-0"),
+        rect("ask-pill"),
+    );
+    assert_eq!(dock[0], notes[0], "the dock starts at the notes column");
+    assert_eq!(chip[0], pill[0] + 2.0, "the chip sits inside the panel");
 }
 
 #[test]
@@ -1591,8 +1608,8 @@ fn meeting_grid_is_a_44_strip_640_notes_40_gap_and_300_tasks() {
     assert_eq!((head[0], head[2]), (main[0], 640.0), "header");
     // The Ask bar is the notes column wide and starts where it does; the fade and the Ask
     // stack together are 150, measured from the window bottom like the mock's.
-    let pill = rect(&rt, "ask-pill");
-    assert_eq!((pill[0], pill[2]), (main[0], 640.0), "Ask bar");
+    let dock = rect(&rt, "meeting-bottom-bar");
+    assert_eq!((dock[0], dock[2]), (main[0], 640.0), "Ask bar");
     let fade = rect(&rt, "meeting-scroll-fade")[3] + rect(&rt, "ask-overlay")[3];
     assert_eq!(fade, 150.0, "fade plus Ask bar");
     // The transcript sheet rises inside the notes column.
@@ -1875,7 +1892,10 @@ fn the_ask_bar_starts_on_the_notes_edge_wherever_the_strip_is_on() {
     for size in [(800.0, 900.0), (1000.0, 900.0)] {
         let rt = page_at(size);
         assert!(rt.find("meeting-grid").is_some(), "{size:?}: no strip");
-        let (pill, main) = (rect_of(&rt, "ask-pill"), rect_of(&rt, "meeting-main"));
+        let (pill, main) = (
+            rect_of(&rt, "meeting-bottom-bar"),
+            rect_of(&rt, "meeting-main"),
+        );
         assert_eq!(
             pill[0], main[0],
             "{size:?}: the Ask bar is off the notes edge"
@@ -2088,7 +2108,7 @@ fn meeting_grid_keeps_its_strip_and_column_below_its_width_with_the_tasks_stacke
         "task row {task:?}"
     );
     // The Ask bar and the transcript sheet start on the notes edge too.
-    assert_eq!(r(&rt, "ask-pill")[0], main[0], "Ask bar");
+    assert_eq!(r(&rt, "meeting-bottom-bar")[0], main[0], "Ask bar");
     rt.update(|s, _| s.transcript_open = true);
     rt.frame(0.2);
     rt.settle_all();

@@ -7,8 +7,8 @@
 //! Motion: each move is one ease of about 180 ms with no bounce. Rune shortens it to a fade when
 //! the system asks for reduced motion.
 use super::{
-    AskRun, State,
-    meeting::{COLUMN, PAGE_COLUMN},
+    AskRun, State, icons,
+    meeting::COLUMN,
     roles,
     theme::Palette,
     widgets::{ButtonDisabled, hairline, pressable, quiet_button, spaced_caps},
@@ -294,7 +294,7 @@ fn thread(s: &State, k: &Kit, id: &str, p: Palette) -> Option<El> {
         col()
             .key("ask-thread")
             .w_full()
-            .radius(16.0)
+            .radius(22.0)
             .transition(rise(10.0))
             .child(header),
         p,
@@ -303,7 +303,7 @@ fn thread(s: &State, k: &Kit, id: &str, p: Palette) -> Option<El> {
         panel
             .max_h(super::live::limits(s).thread)
             .min_h(0.0)
-            .clip_rounded(16.0)
+            .clip_rounded(22.0)
     } else {
         panel
     };
@@ -384,41 +384,34 @@ fn thread(s: &State, k: &Kit, id: &str, p: Palette) -> Option<El> {
     Some(panel.child(hairline(p)).child(list))
 }
 
-fn recipe(i: usize, text: &'static str, p: Palette) -> El {
-    super::widgets::button(
-        text,
-        &format!("suggest-{i}"),
-        super::widgets::ButtonRole::Secondary,
-        p,
+fn recipe(i: usize, prompt: &'static str, p: Palette) -> El {
+    pressable(
+        row()
+            .gap(6.0)
+            .items_center()
+            .child(icons::draw(&icons::MESSAGE_SQUARE, 14.0, p.soft))
+            .child(roles::CONTROL.line(prompt, p.soft)),
     )
+    .key(format!("suggest-{i}"))
+    .label(prompt)
+    .h(28.0)
+    .px(10.0)
+    .radius(14.0)
+    .border(1.0, p.line)
+    .hover(p.card)
+    .focus_ring(1.0, 1.0, p.faint)
     .preserve_focus_on_press(true)
     .transition(rise(8.0))
     .enter_delay(i as f32 * 0.03)
-    .on_press(move |s: &mut State| s.send(text))
+    .on_press(move |s: &mut State| s.send(prompt))
 }
 
 /// Gutter of the notes column at normal widths. The saved meeting page's Ask bar uses it, so the bar
 /// lines up with the notes text; at 390 wide the Ask panel keeps its 16 point gutter.
 const NOTES_GUTTER: f32 = 24.0;
 
-/// The suggestion a meeting offers, left-aligned in a row above the Ask bar.
-fn meeting_chips(p: Palette) -> El {
-    row()
-        .key("ask-suggestions")
-        .w_full()
-        .items_center()
-        .gap(8.0)
-        .pb(8.0)
-        .child(
-            recipe(0, "Draft a follow-up", p)
-                .min_h(26.0)
-                .h(26.0)
-                .py(2.0),
-        )
-}
-
-/// A few ideas to ask, floating above the pill while its box has focus and is empty.
-fn suggestions(s: &State, narrow: bool, p: Palette) -> El {
+/// Prompts for the current page, with room reserved for the library link.
+fn suggestions(s: &State, narrow: bool, room: f32, p: Palette) -> El {
     let list: &[&str] = if s.companies.open {
         &[
             "Where do things stand?",
@@ -433,25 +426,43 @@ fn suggestions(s: &State, narrow: bool, p: Palette) -> El {
     let mut r = row()
         .key("ask-suggestions")
         .w_full()
-        .flex_wrap()
+        .h(40.0)
+        .px(2.0)
         .items_center()
-        .gaps(8.0, 8.0);
-    if !s.companies.open {
-        r = r.justify_center();
-    }
-    // Three chips always, a fourth when it still fits on the line: a chip is about 7 points a
-    // letter plus its padding and gap.
-    let room = if narrow { 320.0 } else { 640.0 };
+        .gap(6.0);
+    let room = room - if narrow { 62.0 } else { 118.0 };
     let mut used = 0.0;
-    for (i, text) in list.iter().enumerate().take(4) {
-        let width = text.chars().count() as f32 * 7.0 + 36.0;
-        if i == 3 && used + width > room {
-            break;
+    let mut shown = 0;
+    for (i, text) in list.iter().enumerate() {
+        let width = text.chars().count() as f32 * 5.5 + 42.0;
+        if used + width > room {
+            continue;
         }
         used += width;
         r = r.child(recipe(i, text, p));
+        shown += 1;
+        if shown == if narrow { 2 } else { 3 } {
+            break;
+        }
     }
-    r
+    r.child(el().grow(1.0)).child(
+        super::widgets::link(
+            if narrow {
+                "All \u{203a}"
+            } else {
+                "All prompts \u{203a}"
+            },
+            p,
+        )
+        .key("ask-all-prompts")
+        .label("All prompts")
+        .focus_ring(1.0, 1.0, p.faint)
+        .on_press(|s: &mut State| {
+            s.open_hex();
+            s.hex.section = super::hex::Section::PromptLibrary;
+            super::scene_scroll(s, "agent-instructions");
+        }),
+    )
 }
 
 /// "Claude Sonnet (answer only)" reads as "Sonnet": the picker stays small. What the
@@ -676,9 +687,7 @@ fn scope_choice(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
         .build(k, layer)
 }
 
-/// The room a send or Stop button takes, and how wide the pill is at rest.
 const ACTION: f32 = 28.0;
-const IDLE_W: f32 = 580.0;
 
 /// The round button at the pill's right end: a send arrow once there is text, a Stop square
 /// while a question runs, nothing otherwise. Its slot keeps its size so the model name never
@@ -698,6 +707,9 @@ fn action(s: &State, p: Palette, ready: bool, pending: bool) -> El {
                 p,
             )
             .help(format!("Stop {who}"))
+            .size(ACTION, ACTION)
+            .radius(14.0)
+            .focus_ring(1.0, 1.0, p.faint)
             .transition(pop())
             .dim(if stopping { 0.5 } else { 1.0 })
             .on_press(|s: &mut State| s.stop_ask()),
@@ -712,6 +724,9 @@ fn action(s: &State, p: Palette, ready: bool, pending: bool) -> El {
                 super::widgets::ButtonRole::Primary,
                 p,
             )
+            .size(ACTION, ACTION)
+            .radius(14.0)
+            .focus_ring(1.0, 1.0, p.faint)
             .transition(pop())
             .on_press(|s: &mut State| {
                 let q = s.question.text.clone();
@@ -724,29 +739,28 @@ fn action(s: &State, p: Palette, ready: bool, pending: bool) -> El {
 
 /// What the pill says when no agent CLI is on this machine.
 fn no_agent(s: &State, p: Palette) -> El {
-    let mut note = col()
-        .grow(1.0)
-        .min_w(0.0)
-        .gap(2.0)
-        .child(roles::CONTROL.wrap(
-            "Ask works with Claude Code, Codex or OpenCode. Meeting summaries need Claude Code.",
-            p.ink,
-        ));
+    let mut note = col().min_w(0.0).gap(2.0).child(roles::CONTROL.wrap(
+        "Ask works with Claude Code, Codex or OpenCode. Meeting summaries need Claude Code.",
+        p.ink,
+    ));
     if s.agents_rechecked {
         note = note.child(roles::META.wrap(
             "Still not found. If you just installed one, press Check again, or restart Sidenote if it still fails.",
             p.faint,
         ));
     }
-    row()
+    let (content, note) = if s.app_w.get() < 600.0 {
+        (col().items_start(), note.w_full())
+    } else {
+        (row().items_center(), note.grow(1.0))
+    };
+    content
         .key("ask-pill")
         .w_full()
-        .max_w(IDLE_W)
         .gap(10.0)
-        .items_center()
         .px(20.0)
         .py(10.0)
-        .radius(26.0)
+        .radius(22.0)
         .child(note)
         .child(
             crate::ui::widgets::action("Check again", p)
@@ -762,13 +776,13 @@ pub fn overlay(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>
     overlay_with(s, k, p, narrow, layer, None, None)
 }
 
-/// The bar with room for more: `lead` sits beside the pill (above it in a narrow window), and
+/// The bar with room for more: `lead` sits beside the pill, and
 /// `above` floats over the thread. The live page puts its recording pill and transcript here.
 pub fn overlay_with(
     s: &State,
     k: &Kit,
     p: Palette,
-    narrow: bool,
+    _narrow: bool,
     layer: &mut Vec<El>,
     lead: Option<El>,
     above: Option<El>,
@@ -778,30 +792,19 @@ pub fn overlay_with(
     let meeting_bar = s.selected.is_some();
     // On the saved meeting page the bar is the notes column's width and shares its left edge.
     let notes_column = meeting_bar && !s.on_live() && !s.companies.open && !s.meeting_ui.tabs;
-    // The thread keeps a 16 gutter in a narrow window; the bar steps in to where the notes start,
-    // which is the same 16 on a phone and 24 beyond it.
-    let bar_inset = if notes_column && narrow {
-        (super::meeting::gutter(s) - 16.0).max(0.0)
-    } else {
+    let compact = s.app_w.get() < 600.0;
+    let gutter = if notes_column && super::meeting::strip(s) || s.companies.open {
         0.0
+    } else if notes_column && !compact {
+        NOTES_GUTTER
+    } else {
+        16.0
     };
-    let mut stack = col().w_full().gap(if meeting_bar { 0.0 } else { 10.0 });
-    if notes_column {
-        // The wide page's notes column is the bar's width exactly, with no gutter of its own.
-        let gutter = if super::meeting::strip(s) {
-            0.0
-        } else if narrow {
-            16.0
-        } else {
-            NOTES_GUTTER
-        };
-        stack = stack.max_w(COLUMN + 2.0 * gutter).px(gutter);
-    } else if !s.companies.open {
-        stack = stack
-            .max_w(PAGE_COLUMN)
-            .px(if narrow { 16.0 } else { 28.0 })
-            .items_center();
-    }
+    let mut stack = col()
+        .w_full()
+        .max_w(COLUMN + 2.0 * gutter)
+        .px(gutter)
+        .gap(6.0);
     if s.back.is_some() && !(s.selected.is_some() && !s.meeting_ui.tabs && s.transcript_open) {
         stack = stack.child(
             row().w_full().justify_end().child(
@@ -824,7 +827,9 @@ pub fn overlay_with(
     if let Some(panel) = above {
         stack = stack.child(panel);
     }
-    if let Some(panel) = thread(s, k, &id, p) {
+    let thread = thread(s, k, &id, p);
+    let showing_thread = thread.is_some() && !s.thread_hidden;
+    if let Some(panel) = thread {
         stack = stack.child(panel);
     }
     if let Some(notice) = &s.ask_settings.fallback_notice {
@@ -905,13 +910,15 @@ pub fn overlay_with(
         } else {
             raised(no_agent(s, p), p)
         };
-        return place(s, beside(stack, lead, pill, narrow), narrow, p);
+        let (stack, lead) = if compact {
+            (stack.children(lead.map(El::self_start)), None)
+        } else {
+            (stack, lead)
+        };
+        return place(s, with_note(beside(stack, lead, pill), p), p);
     }
     let empty = s.question.text.trim().is_empty();
-    let focused = s.ask_open;
-    if empty && !pending && focused && s.selected.is_none() && !s.on_live() {
-        stack = stack.child(suggestions(s, narrow, p));
-    }
+    let focused = s.ask_open || s.runner_open;
     let input = TextInput::new(&s.question)
         .plain()
         .placeholder(if s.companies.open {
@@ -931,35 +938,37 @@ pub fn overlay_with(
         } else {
             "Ask about your meetings"
         })
-        .height(28.0)
+        .height(44.0)
+        .text_style(rune::TextStyle::new(13.5, 400.0).lh(20.0))
         .on_edit(|s: &mut State| &mut s.question)
         .on_submit(|s: &mut State, _| {
             let q = s.question.text.clone();
             s.send(&q);
         })
         .on_key(|s: &mut State, e: &KeyEvent, tx: &mut Tx| {
-            // Esc folds the bar back to rest.
-            if e.key == Key::Escape {
+            if e.key != Key::Escape {
+                return false;
+            }
+            if s.runner_open {
                 s.runner_open = false;
                 s.ask_settings.thinking_open = false;
-                if s.selected.is_some() && !s.meeting_ui.tabs && s.transcript_open {
-                    s.close_transcript_sheet();
-                } else {
-                    tx.blur();
-                }
-                return true;
+            } else if s.on_live()
+                && let Some(live) = s.live.as_mut().filter(|live| live.panel_open)
+            {
+                live.panel_open = false;
+            } else if s.selected.is_some() && !s.meeting_ui.tabs && s.transcript_open {
+                s.close_transcript_sheet();
+            } else {
+                tx.blur();
             }
-            false
+            true
         })
         .build(k)
         .key("ask-input")
         .grow(1.0)
         .min_w(0.0);
     let ready = !empty && !pending;
-    // The pill lines up with the thread above it when there is one.
-    let wide = s.on_live() || focused || pending || !empty || !s.saved.messages.is_empty();
-    let in_meeting = s.selected.is_some() || s.on_live();
-    let model = Some({
+    let model = (focused || pending).then(|| {
         if s.ask_settings.connection.settings.enabled {
             quiet_button("Connection", "ask-endpoint-settings", p)
                 .button_disabled(pending)
@@ -980,59 +989,38 @@ pub fn overlay_with(
                     .wrap(format!("Runners are not set up. {e}"), p.warn)
                     .px(8.0)
                     .max_w(260.0),
-                None => runner_choice(s, k, p, narrow, notes_column, layer),
+                None => runner_choice(s, k, p, compact, notes_column, layer),
             }
         }
     });
-    // Use the empty send slot for help so it does not squeeze the field or picker at 390 px.
-    let help = (notes_column
+    let help = (focused
         && empty
         && !pending
         && s.runner_error.is_none()
         && !s.ask_settings.connection.settings.enabled)
         .then(|| super::widgets::HelpHint::Model.build(k, p, layer));
-    // The level control sits inside the bar, at its left; the bar is 40 points tall.
-    let lead_in = lead.is_some();
-    let mut pill = row()
+    let pill = row()
         .key("ask-pill")
+        .w_full()
+        .h(44.0)
         .gap(4.0)
         .items_center()
-        .pl(if lead_in {
-            3.0
-        } else if narrow {
-            14.0
-        } else {
-            20.0
-        })
-        .pr(4.0)
-        .py(if lead_in { 2.0 } else { 6.0 })
-        .radius(999.0)
-        // It widens to the width of the thread and rises 4 points on focus.
-        .motion(EASE_IN)
-        .offset(0.0, if focused { -4.0 } else { 0.0 })
-        .offset_motion(EASE_IN)
+        .pl(18.0)
+        .pr(8.0)
+        .radius(22.0)
         .fill(p.card)
         .border(1.0, if focused { p.faint } else { p.line })
-        .shadow(
-            if focused { 8.0 } else { 3.0 },
-            if focused { 28.0 } else { 16.0 },
-            p.shadow,
-        )
-        .children(lead)
+        .shadow(3.0, 16.0, p.shadow)
+        .focus_within_flat()
+        .on_press_tx(|_: &mut State, tx| tx.focus("ask-input", false))
         .child(input)
         .children(model)
-        .child(
+        .children((focused || pending).then(|| {
             action(s, p, ready, pending)
                 .items_center()
                 .justify_center()
-                .children(help),
-        );
-    // Beside the recording pill the Ask pill takes the rest of the row; alone it is a column.
-    pill = if s.companies.open || notes_column {
-        pill.w_full()
-    } else {
-        pill.w_full().max_w(if wide { PAGE_COLUMN } else { IDLE_W })
-    };
+                .children(help)
+        }));
     if s.live_scope_available() {
         stack = stack.child(
             row()
@@ -1041,21 +1029,55 @@ pub fn overlay_with(
                 .child(scope_choice(s, k, p, layer)),
         );
     }
-    // A meeting offers one suggestion today, in a row above the bar.
-    if in_meeting && empty && !pending {
-        stack = stack.child(meeting_chips(p).px(bar_inset));
-    }
-    // The thread keeps the page's 16 point gutter at 390 wide; the bar still starts where the
-    // notes do, so it steps in by the difference.
-    let stack = stack.child(if bar_inset > 0.0 {
-        col().w_full().px(bar_inset).child(pill)
-    } else {
-        pill
-    });
-    place(s, stack, narrow, p)
+    let lead = lead.filter(|_| !compact || !focused);
+    let room = ((s.app_w.get() - super::nav::width(s)) - 2.0 * gutter).min(COLUMN)
+        - if lead.is_some() { 64.0 } else { 0.0 };
+    let panel = col()
+        .key("ask-panel")
+        .w_full()
+        .padding(6.0)
+        .radius(28.0)
+        .border(
+            1.0,
+            if focused {
+                p.line
+            } else {
+                rune::Color::TRANSPARENT
+            },
+        )
+        .fill(if focused {
+            p.chip
+        } else {
+            rune::Color::TRANSPARENT
+        })
+        .shadow(
+            8.0,
+            28.0,
+            if focused {
+                p.shadow
+            } else {
+                rune::Color::TRANSPARENT
+            },
+        )
+        .children(
+            (focused && empty && !pending && !showing_thread)
+                .then(|| suggestions(s, compact, room, p)),
+        )
+        .child(pill);
+    place(s, with_note(beside(stack, lead, panel), p), p)
 }
 
-fn place(s: &State, stack: El, narrow: bool, p: Palette) -> El {
+fn with_note(stack: El, p: Palette) -> El {
+    stack.child(
+        roles::META
+            .wrap("Answers come from your meetings and can be wrong.", p.faint)
+            .key("ask-note")
+            .self_center()
+            .align(rune::Align::Center),
+    )
+}
+
+fn place(s: &State, stack: El, p: Palette) -> El {
     if s.on_live() {
         col()
             .key("ask-overlay")
@@ -1064,11 +1086,11 @@ fn place(s: &State, stack: El, narrow: bool, p: Palette) -> El {
             .min_h(0.0)
             .shrink()
             .items_center()
-            .pb(18.0)
+            .pb(8.0)
             .fill(p.bg)
             .child(
                 stack
-                    .max_h((super::live::limits(s).space - 18.0).max(0.0))
+                    .max_h((super::live::limits(s).space - 8.0).max(0.0))
                     .min_h(0.0)
                     .shrink()
                     .scroll(rune::ScrollSpec {
@@ -1084,25 +1106,22 @@ fn place(s: &State, stack: El, narrow: bool, p: Palette) -> El {
             .w_full()
             .items_start()
             .shrink()
-            .py(12.0)
+            .pb(8.0)
             .child(stack)
     } else {
-        dock(stack, narrow, p)
+        dock(stack, p)
     }
 }
 
-/// Puts `lead` next to `pill` (above it when narrow) at the bottom of `stack`.
-fn beside(stack: El, lead: Option<El>, pill: El, _narrow: bool) -> El {
-    let Some(lead) = lead else {
-        return stack.child(pill);
-    };
+/// Keep the transcript control level with the input as the panel opens above it.
+fn beside(stack: El, lead: Option<El>, pill: El) -> El {
     stack.child(
         row()
             .key("meeting-bottom-bar")
             .w_full()
             .gap(8.0)
-            .items_center()
-            .child(lead)
+            .items_end()
+            .children(lead.map(|control| control.mb(6.0).shrink()))
             .child(pill.grow(1.0).min_w(0.0)),
     )
 }
@@ -1110,12 +1129,12 @@ fn beside(stack: El, lead: Option<El>, pill: El, _narrow: bool) -> El {
 /// The stack pinned to the bottom edge, centred. A short fade lifts the page out from under it,
 /// and from the fade down the ground is solid page colour, so the chips, the thread and the
 /// pill never have loose page text showing through them.
-fn dock(stack: El, narrow: bool, p: Palette) -> El {
+fn dock(stack: El, p: Palette) -> El {
     col()
         .key("ask-overlay")
         .pin(Some(0.0), None, Some(0.0), Some(0.0))
         .items_center()
-        .child(el().w_full().h(48.0).linear_gradient(
+        .child(el().w_full().h(150.0).linear_gradient(
             std::f32::consts::PI,
             [
                 (0.0, p.bg.alpha(0.0)),
@@ -1127,7 +1146,7 @@ fn dock(stack: El, narrow: bool, p: Palette) -> El {
             col()
                 .w_full()
                 .items_center()
-                .pb(if narrow { 10.0 } else { 18.0 })
+                .pb(8.0)
                 .fill(p.bg)
                 .child(stack),
         )
