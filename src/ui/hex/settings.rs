@@ -1,7 +1,7 @@
 //! Settings layout and destinations. Hex keys are routed, never renamed or migrated.
 use super::*;
 use crate::ui::{ai_notes, cards, icons, nav, tasks, widgets::ButtonDisabled};
-use sidenote::core::{Feature as AppFeature, UiPrefs};
+use sidenote::core::{CHANNEL, Channel, Feature as AppFeature, UiPrefs};
 use std::collections::BTreeMap;
 
 mod engine;
@@ -121,6 +121,9 @@ impl Page {
             Self::Diagnostics => "Diagnostics",
         }
     }
+    fn visible(self, channel: Channel) -> bool {
+        channel == Channel::Nightly || !matches!(self, Self::Sync | Self::ConnectedApps)
+    }
     pub(in crate::ui) fn tabs(self) -> &'static [&'static str] {
         match self {
             Self::People => &["Our team", "External"],
@@ -212,7 +215,16 @@ fn current(section: Section) -> (Page, usize) {
 }
 
 fn active(s: &State) -> (Page, usize) {
-    current(s.hex.section)
+    let (page, tab) = current(s.hex.section);
+    if page.visible(CHANNEL) {
+        (page, tab)
+    } else {
+        (Page::General, 0)
+    }
+}
+
+pub(in crate::ui) fn section_visible(section: Section) -> bool {
+    current(section).0.visible(CHANNEL)
 }
 
 fn tab_visible(s: &State, page: Page, tab: usize) -> bool {
@@ -220,6 +232,9 @@ fn tab_visible(s: &State, page: Page, tab: usize) -> bool {
 }
 
 pub(crate) fn navigate(s: &mut State, page: Page, tab: usize) {
+    if !page.visible(CHANNEL) {
+        return;
+    }
     if page == Page::People {
         if s.config.features.people {
             s.hex.filter = TextEdit::default();
@@ -1281,7 +1296,9 @@ fn index(s: &State) -> Vec<Destination> {
             }),
     );
     let mut seen = HashSet::new();
-    entries.retain(|dest| seen.insert((dest.key.clone(), dest.page.name(), dest.tab)));
+    entries.retain(|dest| {
+        dest.page.visible(CHANNEL) && seen.insert((dest.key.clone(), dest.page.name(), dest.tab))
+    });
     for alias in legacy_aliases() {
         if let Some(dest) = entries.iter_mut().find(|d| d.key == alias.target) {
             dest.words.push(' ');
@@ -1477,7 +1494,7 @@ fn settings_list(s: &State, k: &Kit, p: Palette, width: f32) -> El {
         }
     } else {
         let (active, _) = active(s);
-        for page in Page::ALL {
+        for page in Page::ALL.into_iter().filter(|page| page.visible(CHANNEL)) {
             if matches!(page, Page::General | Page::Hex | Page::Privacy) {
                 list = list.child(row().h(28.0).px(8.0).items_center().mt(12.0).child(
                     roles::META.line(
@@ -2753,8 +2770,11 @@ fn body(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>, page: Page, tab: us
         (Page::Privacy, _) => col()
             .w_full()
             .child(privacy(s, k, p))
-            .child(roles::SMALL.wrap("Connected apps can read meetings, typed notes, tasks and memory, and send them to their AI provider.", p.soft))
-            .child(tasks::button("Manage connected apps", "privacy-connected-apps", false, p).on_press(|s: &mut State| navigate(s, Page::ConnectedApps, 0)))
+            .children(Page::ConnectedApps.visible(CHANNEL).then(|| {
+                col()
+                    .child(roles::SMALL.wrap("Connected apps can read meetings, typed notes, tasks and memory, and send them to their AI provider.", p.soft))
+                    .child(tasks::button("Manage connected apps", "privacy-connected-apps", false, p).on_press(|s: &mut State| navigate(s, Page::ConnectedApps, 0)))
+            }))
             .child(settings_card(
                 "Hex · Retention and files",
                 hex_rows(s, k, p, layer, page, 0, false),
@@ -3759,6 +3779,23 @@ mod tests {
         let pages: Vec<_> = Page::ALL.into_iter().collect();
         let index = pages.iter().position(|p| *p == Page::Helpers).unwrap();
         assert_eq!(pages[index + 1], Page::ConnectedApps);
+    }
+
+    #[test]
+    fn stable_hides_sync_and_external_app_setup() {
+        let state = State::new();
+        let destinations = index(&state);
+        for page in [Page::Sync, Page::ConnectedApps] {
+            assert!(!page.visible(Channel::Stable));
+            assert!(page.visible(Channel::Nightly));
+            assert_eq!(
+                destinations
+                    .iter()
+                    .any(|destination| destination.page == page),
+                CHANNEL == Channel::Nightly
+            );
+        }
+        assert!(Page::Helpers.visible(Channel::Stable));
     }
     #[test]
     fn legacy_search_words_find_the_new_destinations() {

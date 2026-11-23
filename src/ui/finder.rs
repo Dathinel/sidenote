@@ -118,7 +118,10 @@ fn entries(s: &State, query: &str) -> Vec<Entry> {
     pages.push(page("Settings", "Hex and this app", Target::Settings(None)));
     if typed {
         // The Settings tabs are listed by name only when the query asks for one of them.
-        for section in hex::Section::ALL {
+        for section in hex::Section::ALL
+            .into_iter()
+            .filter(|s| hex::settings::section_visible(*s))
+        {
             pages.push(page(
                 &format!("Settings \u{b7} {}", section.name()),
                 section.blurb(),
@@ -319,7 +322,7 @@ impl State {
             }
             Target::Settings(section) => {
                 self.open_hex();
-                if let Some(section) = section {
+                if let Some(section) = section.filter(|s| hex::settings::section_visible(*s)) {
                     self.hex.section = section;
                 }
                 self.nav_done();
