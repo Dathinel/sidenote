@@ -215,7 +215,7 @@
   "src/ui/idle_cpu/measurement.rs": "e4be960feb8fd3fe5bef8d5d8e3c409aa8cf6e8d8fb77fccc0c4011777af7c2b",
   "src/ui/live.rs": "a6a605d1ce3808f4827b7d7cd2c2eabf56276c8cc704299e6e8569c80f081165",
   "src/ui/mcp_connect.rs": "b7372660109d111f146b60c90b4a3387c66b2e9eebdc0332ac2bc07034cbba20",
-  "src/ui/memory.rs": "5e8f34ad55bbc46933d1f95721075d883d2a6a2345055051f46545a149db71ec",
+  "src/ui/memory.rs": "ef2dfa9a3d6fc311f00b709e4c006adc7e66878cf58583fa53bc684ef5a007ac",
   "src/ui/memory/settled.rs": "9d0915dfa235083870103a6872b2fc6e23c267328989d288b2299e1e0e460b58",
   "src/ui/mod.rs": "fbed5c5cb3fd9d9de2b2877646dad2ce80711c9ae6030117fa71ae6926773d0e",
   "src/ui/models.rs": "652e50da1b1d7c3e3f45b8da81879830e08b543a8bfb8f9832335cd2dd6ba169",
