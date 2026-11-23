@@ -9,8 +9,10 @@ Delete requires a connection to Hex so Sidenote can confirm the meeting has stop
 
 Choose **Undo** in the confirmation toast to restore and reopen the meeting.
 The **Deleted meetings** button in the library lists recoverable meetings
-with their deletion date and days left. Sidenote clears expired app data
-when it starts after the 30-day restore period.
+with their deletion date and days left. Sidenote clears the recycled meeting
+files when it starts after the 30-day restore period. It keeps a small purge
+receipt with the title, IDs and Hex fingerprints, along with suppression records
+that keep the meeting hidden.
 
 Hex recordings stay in place. Exports, earlier Ask answers, daily-check
 history and accepted memory are kept. A daily check that started before

@@ -275,6 +275,7 @@ pub struct State {
     pub feature_error: Option<String>,
     pub meetings: Vec<Meeting>,
     pub scan_errors: Vec<String>,
+    delete_recovery_failed: bool,
     pub short_recordings: Vec<core::recording_guard::ShortRecording>,
     /// The open meeting. None is the home list.
     pub selected: Option<String>,
@@ -476,17 +477,20 @@ impl State {
     }
 
     pub fn new() -> Self {
+        Self::new_with_delete_maintenance(
+            core::Config::default()
+                .features
+                .enabled(core::Feature::Delete),
+        )
+    }
+
+    fn new_with_delete_maintenance(delete_enabled: bool) -> Self {
         #[cfg(test)]
         crate::test_paths::isolate();
         let settle_recovery_error = core::settle::Store::default().recover().err();
-        let delete_recovery_failed = core::Config::default()
-            .features
-            .enabled(core::Feature::Delete)
-            && meeting_delete::maintain(&core::state_dir()).is_err();
-        let (meetings, mut scan_errors) = core::scan();
-        if delete_recovery_failed {
-            scan_errors.push("Some deleted meetings could not be recovered or cleared.".into());
-        }
+        let delete_recovery_failed =
+            delete_enabled && meeting_delete::maintain(&core::state_dir()).is_err();
+        let (meetings, scan_errors) = core::scan();
         let (events_tx, events_rx) = mpsc::channel();
         let store = StateStore::default();
         let (runners, runner_error) = match ask_runners() {
@@ -534,6 +538,7 @@ impl State {
             selected: None,
             meetings,
             scan_errors,
+            delete_recovery_failed,
             short_recordings: core::recording_guard::short_recordings(
                 &core::state_dir(),
                 &core::meetings_dir(),
@@ -2009,7 +2014,10 @@ fn poll(s: &mut State, clock: f64, tx: &mut Tx) -> bool {
         changed = true;
     }
     changed |= s.hex_connection_tick(tx);
-    if let Some((message, id, redo)) = s.memory.settle_pending_toast.take() {
+    changed |= s.expire_toast();
+    if s.delete_ui.undo.is_none()
+        && let Some((message, id, redo)) = s.memory.settle_pending_toast.take()
+    {
         s.show_toast(message, tx);
         s.memory.settle_toast_action = Some((id, redo));
         if let Some((_, until)) = &mut s.toast {
@@ -2051,7 +2059,6 @@ fn poll(s: &mut State, clock: f64, tx: &mut Tx) -> bool {
         changed = true;
     }
     changed |= s.live_tick();
-    changed |= s.expire_toast();
     changed |= hex::settings_tick(s, tx);
     changed |= prompt_library::tick(s, tx);
     changed |= relay::tick(s, tx);
@@ -2448,6 +2455,29 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
                 .px(24.0)
                 .py(8.0)
                 .fill(p.warnbg),
+        );
+    }
+    if s.delete_recovery_failed {
+        main = main.child(
+            row()
+                .gap(8.0)
+                .items_center()
+                .px(16.0)
+                .py(8.0)
+                .fill(p.warnbg)
+                .child(
+                    roles::SMALL
+                        .wrap(
+                            "Some deleted meetings could not be recovered or cleared.",
+                            p.warn,
+                        )
+                        .grow(1.0)
+                        .role("alert"),
+                )
+                .child(
+                    widgets::quiet_button("Dismiss", "delete-recovery-dismiss", p)
+                        .on_press(|s: &mut State| s.delete_recovery_failed = false),
+                ),
         );
     }
     if let Some(error) = s.areas.error.as_ref().or(s.areas.notice.as_ref()) {
