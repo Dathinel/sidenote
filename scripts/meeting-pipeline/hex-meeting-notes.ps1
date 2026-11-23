@@ -17,10 +17,13 @@ $notesEngine = Get-ScriptsNotesEngine
 if ($notesEngine -cne 'scripts') { Write-Output (Format-NotesSkip $notesEngine); return }
 
 $ownedClaim = $null
+$recycleClaim = $null
 try {
     if (-not $MeetingDir -or (Split-Path -Leaf $MeetingDir) -cnotmatch '\A[0-9][0-9-]{0,99}\z') {
         Write-Output 'notes skipped category=claim_invalid'; return
     }
+    $recycleClaim = Enter-MeetingRecycleClaim $MeetingDir
+    if ($null -eq $recycleClaim) { Write-Output 'notes deferred engine busy'; return }
     $claimPath = [IO.Path]::GetFullPath((Join-Path $MeetingDir $script:JobContract.lock_file))
     if ($null -ne $NotesClaim) {
         if (-not $NotesClaim.CanWrite -or -not [string]::Equals($NotesClaim.Name, $claimPath, [StringComparison]::OrdinalIgnoreCase)) {
@@ -94,4 +97,5 @@ Write-Output "notes: $Project, $Model -> $OutFile"
 
 } finally {
     if ($null -ne $ownedClaim) { $ownedClaim.Dispose() }
+    if ($null -ne $recycleClaim) { $recycleClaim.Dispose() }
 }

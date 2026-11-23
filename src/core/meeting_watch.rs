@@ -545,7 +545,8 @@ pub(crate) fn start_managed(log: fn(&str)) -> (Sender<String>, std::thread::Join
         let meetings = super::meetings_dir();
         #[cfg(windows)]
         let mut source = super::recording_source::Session::open(
-            super::recording_source::folders::Discovery::configured(meetings.clone()),
+            super::recording_source::folders::Discovery::configured(meetings.clone())
+                .suppress_in(state.clone()),
             state.join("local/recording-source.json"),
         );
         loop {

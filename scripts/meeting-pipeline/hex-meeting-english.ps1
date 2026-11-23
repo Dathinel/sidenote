@@ -30,6 +30,7 @@ $pipelineStage = 'pipeline'; $pipelineDeadline = 0
 $pipelineStep = [Diagnostics.Stopwatch]::StartNew()
 $temp = $null
 $notesClaim = $null
+$recycleClaim = $null
 try {
 $total = [Diagnostics.Stopwatch]::StartNew()
 $utf8 = New-Object System.Text.UTF8Encoding $false
@@ -44,6 +45,8 @@ if ($NotesOnly -and $TranscriptOnly) { throw 'Choose notes only or transcript on
 $dir = Get-Item -LiteralPath $MeetingDir
 if (-not $dir.PSIsContainer) { throw "MeetingDir is not a folder: $MeetingDir" }
 if ($TranscriptOnly -and (Test-Path -LiteralPath (Join-Path $dir.FullName 'english-transcript.md'))) { return }
+$recycleClaim = Enter-MeetingRecycleClaim $dir.FullName
+if ($null -eq $recycleClaim) { Write-Output 'notes deferred engine busy'; return }
 $notesClaim = Enter-NotesEngine $dir.FullName
 if ($null -eq $notesClaim) { Write-Output 'notes deferred engine busy'; return }
 if ($script:JobContract.preserve_completed -and -not $NotesOnly -and -not $TranscriptOnly -and
@@ -304,5 +307,6 @@ function Run-LLM([string]$instruction, [string]$contents, [string]$tag) {
     throw (Get-PipelineFailure $_ $pipelineStage $pipelineDeadline $pipelineStep.Elapsed.TotalSeconds)
 } finally {
     if ($null -ne $notesClaim) { $notesClaim.Dispose() }
+    if ($null -ne $recycleClaim) { $recycleClaim.Dispose() }
     if ($temp -and (Test-Path -LiteralPath $temp)) { Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue }
 }

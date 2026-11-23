@@ -1,6 +1,9 @@
 param([Parameter(Mandatory)][string]$MeetingDir)
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'hex-pipeline-cli.ps1')
+$recycleClaim = Enter-MeetingRecycleClaim $MeetingDir
+if ($null -eq $recycleClaim) { return }
+try {
 $clock = [Diagnostics.Stopwatch]::StartNew()
 Start-Sleep -Seconds 300
 $work = Join-Path ([IO.Path]::GetTempPath()) ('hex-compare-log-' + [guid]::NewGuid().ToString('N'))
@@ -11,3 +14,4 @@ try {
 } catch {
     Write-Host (Get-PipelineFailure $_ 'compare' 1800 $clock.Elapsed.TotalSeconds)
 } finally { Remove-Item -LiteralPath $work -Recurse -Force }
+} finally { $recycleClaim.Dispose() }

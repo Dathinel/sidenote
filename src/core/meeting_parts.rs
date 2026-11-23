@@ -97,6 +97,7 @@ pub fn discard_pending(root: &Path, id: &str, draft: Draft) -> io::Result<bool> 
     if !m.parts.is_empty() {
         return Ok(false);
     }
+    let _claim = m.claim(root)?;
     let folder = inputs(root).join(id);
     match (
         &draft,
@@ -105,7 +106,7 @@ pub fn discard_pending(root: &Path, id: &str, draft: Draft) -> io::Result<bool> 
         (_, Ok(meta)) if meta.is_file() => {
             if m.pending_start_ms.take().is_some() || m.phase != Phase::Ended {
                 m.phase = Phase::Ended;
-                m.save(root)?;
+                m.save_claimed(root)?;
             }
             return Ok(true);
         }
@@ -141,7 +142,20 @@ pub fn source(root: &Path, hex: &Path, id: &str) -> PathBuf {
     }
 }
 impl Meeting {
+    fn claim(&self, root: &Path) -> io::Result<Vec<std::fs::File>> {
+        let ids: std::collections::BTreeSet<_> = std::iter::once(self.id.as_str())
+            .chain(self.parts.iter().map(|part| part.id.as_str()))
+            .collect();
+        ids.into_iter()
+            .map(|id| {
+                super::meeting_delete::claim_write(root, id)?
+                    .ok_or_else(|| io::ErrorKind::NotFound.into())
+            })
+            .collect()
+    }
+
     pub fn write_view(&self, root: &Path) -> io::Result<()> {
+        let _claim = self.claim(root)?;
         if self.requested_parts > 0 {
             return Ok(());
         }
@@ -153,6 +167,11 @@ impl Meeting {
         )
     }
     pub fn save(&self, root: &Path) -> io::Result<()> {
+        let _claim = self.claim(root)?;
+        self.save_claimed(root)
+    }
+
+    fn save_claimed(&self, root: &Path) -> io::Result<()> {
         let path = path(root, &self.id)?;
         let _lock = store_io::lock(&path.with_extension("lock"))?;
         let mut next = self.clone();
@@ -353,7 +372,7 @@ pub fn held_in(root: &Path, hex: &Path, id: &str) -> io::Result<bool> {
 
 /// Preserve the old notes while the script writes the replacement for a joined input.
 pub fn prepare_script_update(root: &Path, id: &str) -> io::Result<()> {
-    path(root, id)?;
+    let _claim = super::meeting_delete::claim_write(root, id)?.ok_or(io::ErrorKind::NotFound)?;
     let folder = inputs(root).join(id);
     let summary = folder.join("english-summary.json");
     if summary.is_file() {

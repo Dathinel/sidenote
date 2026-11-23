@@ -235,9 +235,7 @@ fn pipeline_with(
         return Ok(());
     }
     let mut folders = script_folders(state, meetings, meeting_id).at(Stage::CatchUpMeetings)?;
-    let script_lock = match crate::core::store_io::lock(
-        &crate::core::state_dir().join("local/notes-script.lock"),
-    ) {
+    let script_lock = match crate::core::store_io::lock(&state.join("local/notes-script.lock")) {
         Ok(lock) => lock,
         Err(e) if matches!(e.raw_os_error(), Some(32 | 33)) => return Ok(()),
         Err(e) => return Err(Stage::CatchUpScriptLock.error(e)),
