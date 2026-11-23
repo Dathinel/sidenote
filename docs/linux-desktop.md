@@ -4,6 +4,15 @@ The `desktop` feature includes the shared screens and Rune UI dependencies. `ui-
 remains a compatibility alias. The pinned Rune revision supplies winit X11/Wayland,
 AT-SPI accessibility and wgpu Vulkan; no Rune fork or vendored backend is used.
 
+CI uses Ubuntu 24.04 with these native packages as its build baseline. A desktop
+session may need additional runtime packages. See [CONTRIBUTING.md](../CONTRIBUTING.md)
+for Rust setup and contributor checks.
+
+```sh
+sudo apt-get update
+sudo apt-get install -y --no-install-recommends build-essential pkg-config libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-dev libx11-xcb-dev
+```
+
 Build on Linux with Rust stable, a native C linker, libxkbcommon development files
 and libxkbcommon-x11 for X11 sessions. Mesa Vulkan drivers provide software rendering
 for Xvfb qualification:
