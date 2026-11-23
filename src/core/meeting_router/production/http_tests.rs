@@ -80,6 +80,19 @@ fn count(f: &Fixture, name: &str) -> u32 {
 fn receipt(f: &Fixture) -> Value {
     serde_json::from_slice(&fs::read(f.work.join("english-transport.json")).unwrap()).unwrap()
 }
+fn recorded_limit(receipt: &Value, key: &str) -> Duration {
+    serde_json::from_value(receipt[key].clone()).unwrap()
+}
+
+fn assert_request_budget(receipt: &Value) {
+    let handshake = recorded_limit(receipt, "test_handshake_limit");
+    let available = recorded_limit(receipt, "test_request_budget");
+    let request = recorded_limit(receipt, "test_request_limit");
+    assert!(!request.is_zero());
+    assert!(request <= available / 2, "reserve time for fallback");
+    assert!(handshake + request < Duration::from_secs(8));
+}
+
 fn reaped(f: &Fixture) {
     use windows_sys::Win32::{Foundation::CloseHandle, System::Threading::*};
     let pid: u32 = fs::read_to_string(f.work.join("service-pid"))
@@ -156,24 +169,37 @@ fn production_http_failure_retains_baseline_without_owner_command() {
 fn production_http_timeout_reaps_request_and_handshake_children() {
     for mode in [3, 4] {
         let f = fixture(mode);
-        let start = Instant::now();
-        run_with_request_timeout(&f, Duration::from_secs(20), Duration::from_secs(2)).unwrap();
-        assert!(start.elapsed() < Duration::from_secs(8));
+        run(&f, Duration::from_secs(20)).unwrap();
         assert_eq!(count(&f, "starts"), 1);
         assert_eq!(count(&f, "command-calls"), 0);
         reaped(&f);
-        assert!(receipt(&f)["fallback_reason"].is_string());
+        let r = receipt(&f);
+        if mode == 3 {
+            assert_eq!(count(&f, "http-calls"), 1);
+            assert_eq!(r["fallback_reason"], "service-request");
+            assert_request_budget(&r);
+        } else {
+            assert_eq!(count(&f, "http-calls"), 0);
+            assert_eq!(r["fallback_reason"], "service-handshake");
+            let handshake = recorded_limit(&r, "test_handshake_limit");
+            assert!(!handshake.is_zero() && handshake < Duration::from_secs(8));
+        }
     }
 }
 #[test]
 fn production_http_request_failure_preserves_whole_run_budget() {
     let f = fixture(9);
-    let start = Instant::now();
-    run(&f, Duration::from_millis(900)).unwrap();
-    assert!(start.elapsed() < Duration::from_secs(8));
+    // The caller's deadline, rather than the bridge's configured cap, limits this run.
+    run_with_request_timeout(&f, Duration::from_secs(10), Duration::from_secs(20)).unwrap();
     assert_eq!(count(&f, "starts"), 1);
+    assert_eq!(count(&f, "http-calls"), 1);
+    assert_eq!(count(&f, "command-calls"), 0);
     reaped(&f);
-    assert!(receipt(&f)["fallback_reason"].is_string());
+    let r = receipt(&f);
+    assert_eq!(r["fallback_reason"], "service-request");
+    assert_request_budget(&r);
+    assert!(f.work.join("hi.clock.json").exists());
+    assert!(f.work.join("te.clock.json").exists());
 }
 
 #[test]

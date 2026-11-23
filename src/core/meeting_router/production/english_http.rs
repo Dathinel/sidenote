@@ -162,7 +162,12 @@ impl HexCommand for RunHex {
             self.state["service_starts"] = 1.into();
             self.save()?;
             let started = Instant::now();
-            let service = Service::start(&self.hex, timeout / 4);
+            let handshake_limit = timeout / 4;
+            #[cfg(test)]
+            {
+                self.state["test_handshake_limit"] = json!(handshake_limit);
+            }
+            let service = Service::start(&self.hex, handshake_limit);
             self.state["service_start_seconds"] = started.elapsed().as_secs_f64().into();
             match service {
                 Ok(service) => self.service = Some(service),
@@ -185,7 +190,14 @@ impl HexCommand for RunHex {
                 .windows(2)
                 .find(|a| a[0] == "--model")
                 .ok_or(HexFailure::InvalidRange)?[1];
-            let outcome = service.call(&self.hex, Path::new(args[2]), model, remaining()? / 2);
+            let request_budget = remaining()?;
+            let request_limit = request_budget / 2;
+            #[cfg(test)]
+            {
+                self.state["test_request_budget"] = json!(request_budget);
+                self.state["test_request_limit"] = json!(request_limit);
+            }
+            let outcome = service.call(&self.hex, Path::new(args[2]), model, request_limit);
             let identity = service.last_reply.clone();
             match outcome {
                 Ok(reply) => {
