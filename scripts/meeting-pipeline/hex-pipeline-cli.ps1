@@ -86,18 +86,19 @@ function Read-HexPrompt([string]$Path) {
 }
 
 function Enter-MeetingRecycleClaim([string]$MeetingDir) {
-    $id = [IO.Path]::GetFileName([IO.Path]::GetFullPath($MeetingDir))
-    if ($id -cnotmatch '\A(?=.*[0-9])[0-9-]{1,100}\z') { return [IO.MemoryStream]::new() }
     $data = if ($env:SIDENOTE_DATA_DIR) { $env:SIDENOTE_DATA_DIR }
             elseif ($env:SIDENOTE_STATE_DIR) { $env:SIDENOTE_STATE_DIR }
             elseif (Test-Path -LiteralPath (Join-Path $env:APPDATA 'sidenote')) { Join-Path $env:APPDATA 'sidenote' }
             else { Join-Path $env:APPDATA 'hex-meetings' }
     $local = Join-Path $data 'local'
     $claims = Join-Path $local 'deleted-meeting-claims'
-    $path = Join-Path $claims $id
     $suppression = Join-Path $local 'deleted-meeting-ids.json'
     $result = $null
     try {
+        $folder = [IO.Path]::GetFullPath($MeetingDir).TrimEnd([char[]]'/\')
+        $id = [IO.Path]::GetFileName($folder)
+        if ($id -cnotmatch '\A(?=.*[0-9])[0-9-]{1,100}\z') { return $null }
+        $path = Join-Path $claims $id
         foreach ($candidate in @($data, $local, $claims, $path, $suppression)) {
             $entry = Get-Item -LiteralPath $candidate -Force -ErrorAction SilentlyContinue
             if ($entry -and ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint)) { return $null }

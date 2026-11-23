@@ -3,6 +3,8 @@ from pathlib import Path
 import json
 import os
 import subprocess
+import sys
+import time
 import tempfile
 import unittest
 
@@ -107,17 +109,24 @@ class EngineLockTests(unittest.TestCase):
 $ErrorActionPreference = 'Stop'
 . 'CLI'
 $sharedA = Enter-MeetingRecycleClaim 'MEETING'
-$sharedB = Enter-MeetingRecycleClaim 'MEETING'
+$sharedB = Enter-MeetingRecycleClaim 'MEETING/'
 if ($null -eq $sharedA -or $null -eq $sharedB) { throw 'shared publication claim failed' }
 $path = $sharedA.Name
+if ($path -cne $sharedB.Name) { throw 'trailing slash selected a different claim' }
+if ($null -ne (Enter-MeetingRecycleClaim 'MEETING/invalid')) { throw 'invalid path acquired a claim' }
 $sharedA.Dispose()
 $sharedB.Dispose()
 $exclusive = [IO.File]::Open($path, 'Open', 'ReadWrite', 'None')
 try {
-    if ($null -ne (Enter-MeetingRecycleClaim 'MEETING')) { throw 'writer entered during recycle' }
+    foreach ($folder in @('MEETING', 'MEETING/')) {
+        if ($null -ne (Enter-MeetingRecycleClaim $folder)) { throw 'writer entered during recycle' }
+    }
 } finally { $exclusive.Dispose() }
 $state = Join-Path $env:SIDENOTE_DATA_DIR 'local/deleted-meeting-ids.json'
 [IO.File]::WriteAllText($state, '{"100-1":"synthetic"}')
+foreach ($folder in @('MEETING', 'MEETING/')) {
+    if ($null -ne (Enter-MeetingRecycleClaim $folder)) { throw 'deleted meeting acquired a claim' }
+}
 $result = & 'ENGLISH' -MeetingDir 'MEETING'
 if ($result -cne 'notes deferred engine busy') { throw 'deleted meeting was admitted' }
 """.replace("CLI", str(HERE / "hex-pipeline-cli.ps1")).replace("MEETING", str(meeting))
@@ -129,6 +138,83 @@ if ($result -cne 'notes deferred engine busy') { throw 'deleted meeting was admi
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual((meeting / "manifest.json").read_bytes(), original)
             self.assertEqual(list(meeting.iterdir()), [meeting / "manifest.json"])
+
+    def test_python_publisher_keeps_claim_after_launcher_dies(self):
+        with tempfile.TemporaryDirectory(prefix="python-recycle-claim-") as tmp:
+            root = Path(tmp)
+            state = root / "state"
+            folder = state / "local/meeting-inputs/100-1"
+            folder.mkdir(parents=True)
+            (folder / "english-summary.json").write_text('{"todo":[]}')
+            env = os.environ | {"APPDATA": str(root), "SIDENOTE_DATA_DIR": str(state)}
+            shared = state / "local/deleted-meeting-claims/100-1"
+            ready, release, done = (root / name for name in ("ready", "release", "done"))
+            child = root / "child.py"
+            child.write_text("""
+import runpy, sys, time
+from pathlib import Path
+helper, folder, ready, release, done = map(Path, sys.argv[1:])
+guard = runpy.run_path(helper)["guarded_meeting"]
+@guard
+def write_claimed(folder):
+    ready.touch()
+    deadline = time.monotonic() + 15
+    while not release.exists():
+        if time.monotonic() >= deadline:
+            return
+        time.sleep(0.02)
+    (folder / "publication.json").write_text("{}")
+write_claimed(folder)
+done.touch()
+""")
+            command = [sys.executable, '-I', str(child), str(HERE / 'hex-pipeline-run.py'),
+                       str(folder), str(ready), str(release), str(done)]
+            launcher = subprocess.Popen(
+                [sys.executable, '-I', '-c',
+                 'import subprocess,sys; subprocess.Popen(sys.argv[1:]).wait()', *command],
+                env=env, creationflags=subprocess.CREATE_NO_WINDOW)
+
+            def await_file(path):
+                deadline = time.monotonic() + 10
+                while not path.exists():
+                    self.assertLess(time.monotonic(), deadline, f"Timed out waiting for {path.name}")
+                    time.sleep(0.02)
+
+            try:
+                await_file(ready)
+                launcher.kill()
+                launcher.wait(timeout=10)
+                probe = f"""
+try {{
+    $exclusive = [IO.File]::Open('{shared}', 'Open', 'ReadWrite', 'None')
+}} catch {{
+    if (($_.Exception.InnerException.HResult -band 0xffff) -in @(32,33)) {{ exit 0 }}
+    throw
+}}
+$exclusive.Dispose()
+exit 1
+"""
+                result = subprocess.run(['powershell', '-NoProfile', '-Command', probe],
+                                        env=env, capture_output=True, timeout=10,
+                                        creationflags=subprocess.CREATE_NO_WINDOW)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertFalse((folder / "publication.json").exists())
+            finally:
+                release.touch()
+                if launcher.poll() is None:
+                    launcher.kill()
+                    launcher.wait(timeout=10)
+                await_file(done)
+            self.assertEqual((folder / "publication.json").read_text(), "{}")
+
+            tasks = [sys.executable, '-I', str(HERE / 'hex-meeting-tasks.py'), str(folder) + '/']
+            subprocess.run(tasks, env=env, check=True, capture_output=True, timeout=10)
+            output = folder / "tasks.json"
+            self.assertEqual(json.loads(output.read_text())["tasks"], [])
+            output.unlink()
+            (state / "local/deleted-meeting-ids.json").write_text('{"100-1":"synthetic"}')
+            subprocess.run(tasks, env=env, check=True, capture_output=True, timeout=10)
+            self.assertFalse(output.exists())
 
     def test_contention_release_and_crash(self):
         with tempfile.TemporaryDirectory(prefix="notes-claim-") as tmp:
