@@ -121,22 +121,22 @@ enum Transcript {
 impl Transcript {
     fn heading(self, slow: bool) -> &'static str {
         match self {
-            Self::Finishing => "Hex is finishing the transcript",
+            Self::Finishing => "You can leave this page",
             Self::Interrupted => "Transcript waiting for Hex",
             Self::Ready if slow => "The summary is taking a while",
             Self::Ready => "Writing the summary",
         }
     }
 
-    fn detail(self) -> &'static str {
+    fn detail(self) -> Option<&'static str> {
         match self {
-            Self::Finishing => {
-                "A summary can be written once Hex finishes the transcript. You can leave this page."
-            }
+            Self::Finishing => None,
             Self::Interrupted => {
-                "Hex was restarted. It will finish this transcript when it starts again."
+                Some("Hex was restarted. It will finish this transcript when it starts again.")
             }
-            Self::Ready => "The summary opens here when it is ready. You can leave this page.",
+            Self::Ready => {
+                Some("The summary opens here when it is ready. You can leave this page.")
+            }
         }
     }
 }
@@ -1682,11 +1682,10 @@ fn making_view(s: &State, p: Palette, narrow: bool) -> El {
                     },
                 )),
         )
-        .child(
-            roles::SMALL
-                .wrap(transcript.detail(), p.soft)
-                .max_w(460.0)
-                .mt(6.0),
+        .children(
+            transcript
+                .detail()
+                .map(|detail| roles::SMALL.wrap(detail, p.soft).max_w(460.0).mt(6.0)),
         );
     if !s.live_notes.text.trim().is_empty() {
         c = c.child(
@@ -1870,6 +1869,29 @@ mod writer_tests {
         }
     }
     #[test]
+    fn finishing_page_announces_transcript_progress_once() {
+        fn view(s: &State, _: &mut rune::Cx<State>) -> El {
+            making_view(s, super::super::theme::palette(false), true)
+        }
+
+        let mut state = State::new();
+        scene_making(&mut state, "transcribing");
+        let mut runtime = rune::Runtime::new(state, view, (360.0, 900.0), rune::Env::default());
+        runtime.frame(0.0);
+        let elements = runtime.elements();
+        let text: Vec<_> = elements.iter().filter_map(|e| e.text.as_deref()).collect();
+        let transcript_lines: Vec<_> = text
+            .iter()
+            .copied()
+            .filter(|line| line.contains("transcript"))
+            .collect();
+        assert_eq!(transcript_lines, ["Finishing the transcript"]);
+        assert!(text.contains(&"You can leave this page"));
+        assert!(text.contains(&"Recording stopped"));
+        assert!(text.contains(&"Back to meetings"));
+    }
+
+    #[test]
     fn restart_and_late_summary_preserve_live_notes() {
         use sidenote::{
             core,
@@ -1960,7 +1982,7 @@ mod writer_tests {
         assert_eq!(making_transcript(&state), Transcript::Interrupted);
         assert_eq!(
             making_transcript(&state).detail(),
-            "Hex was restarted. It will finish this transcript when it starts again."
+            Some("Hex was restarted. It will finish this transcript when it starts again.")
         );
         manifest("complete");
         fs::remove_file(folder.join("final.pending")).unwrap();
