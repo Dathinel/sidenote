@@ -1201,6 +1201,36 @@ fn finish_answer(rt: &mut Runtime<State>) {
 }
 
 #[test]
+fn tab_from_the_ask_editor_focuses_the_model_picker() {
+    if in_parent("tab_from_the_ask_editor_focuses_the_model_picker") {
+        return;
+    }
+    let mut rt = page();
+    rt.set_full_keyboard_access(false);
+    rt.update(|s, tx| {
+        scene_agents(s, ALL_AGENTS);
+        s.ask_open = true;
+        tx.focus("ask-input", true);
+    });
+    rt.frame(0.0);
+    assert!(rt.state.question.focused);
+
+    rt.key(KeyEvent {
+        key: Key::Tab,
+        mods: rune::Mods::default(),
+    });
+    rt.frame(0.0);
+    assert!(!rt.state.question.focused);
+    rt.update_if(|s, tx| poll(s, 0.0, tx));
+    rt.frame(0.0);
+    rt.update_if(|s, tx| {
+        assert_eq!(tx.focused(), Some("ask-model"));
+        assert!(s.ask_open);
+        false
+    });
+}
+
+#[test]
 fn reduced_motion_opens_the_ask_panel_without_moving_the_pill() {
     if in_parent("reduced_motion_opens_the_ask_panel_without_moving_the_pill") {
         return;
@@ -1222,10 +1252,9 @@ fn reduced_motion_opens_the_ask_panel_without_moving_the_pill() {
     rt.frame(0.0);
     let closed = rect_of(&rt, "ask-panel");
     let pill = rect_of(&rt, "ask-pill");
-    rt.update(|s, tx| {
-        s.ask_open = true;
-        tx.motion(rune::tok::motion::GLIDE);
-    });
+    rt.update(|_, tx| tx.focus("ask-input", true));
+    rt.frame(0.0);
+    rt.update(|s, tx| s.ask_open = ask::focus_open(s, tx));
     rt.frame(0.016);
     let opened = rect_of(&rt, "ask-panel");
     assert_eq!(opened[1], closed[1] - 40.0);

@@ -188,6 +188,21 @@ fn submit(s: &mut State, question: &str, tx: &mut Tx) {
     keep_question_focus(s, tx);
 }
 
+pub(super) fn focus_open(s: &State, tx: &mut Tx) -> bool {
+    let open = s.question.focused
+        || tx.focused().is_some_and(|key| {
+            matches!(
+                key,
+                "ask-model" | "ask-endpoint-settings" | "ask-all-prompts" | "ask-send" | "ask-stop"
+            ) || key.starts_with("suggest-")
+        });
+    if open != s.ask_open {
+        // Focus is reported by a later poll, after the input event that caused it.
+        tx.animated();
+    }
+    open
+}
+
 /// "Thinking, 12 s", then "Thinking, 1 min 5 s".
 fn elapsed(secs: u64) -> String {
     if secs < 60 {
@@ -986,6 +1001,14 @@ pub fn overlay_with(
             submit(s, &q, tx);
         })
         .on_key(|s: &mut State, e: &KeyEvent, tx: &mut Tx| {
+            if e.key == Key::Tab
+                && e.mods == rune::Mods::default()
+                && !s.ask_settings.connection.settings.enabled
+                && s.runner_error.is_none()
+            {
+                tx.focus_when_shown("ask-model", true);
+                return true;
+            }
             if e.key != Key::Escape {
                 return false;
             }
