@@ -997,8 +997,10 @@ pub fn overlay_with(
             if s.runner_open {
                 s.runner_open = false;
                 s.ask_settings.thinking_open = false;
-            } else if s.on_live() && s.live.as_ref().is_some_and(|l| l.panel_open) {
-                s.live_toggle_panel();
+            } else if s.on_live()
+                && let Some(live) = s.live.as_mut().filter(|live| live.panel_open)
+            {
+                live.panel_open = false;
             } else if s.selected.is_some() && !s.meeting_ui.tabs && s.transcript_open {
                 s.close_transcript_sheet();
             } else {
