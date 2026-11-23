@@ -928,7 +928,10 @@ fn step_details(c: &Capture, index: usize, frame: &Keyframe, p: Palette, filmstr
                 .on_press_tx(move |s: &mut State, tx| {
                     s.annotations.transcript = true;
                     tx.scroll_to_y("annotations-pane", 0.0);
-                    tx.scroll_key_to(format!("annotation-transcript-part-{transcript_part}"), 12.0);
+                    tx.scroll_key_to(
+                        format!("annotation-transcript-part-{transcript_part}"),
+                        12.0,
+                    );
                 }),
             ),
     );
