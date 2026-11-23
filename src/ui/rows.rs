@@ -1,4 +1,4 @@
-use rune::{Align, Color, Cx, El, Icon, Span, col, el, row};
+use rune::{Align, Color, Cx, El, Icon, Span, Tx, col, el, row};
 use rune_motion::tokens::{SETTLE, pair};
 use rune_motion::{Spring, Transition};
 use sidenote::core::Urgency;
@@ -7,6 +7,7 @@ use std::{rc::Rc, time::Duration};
 use super::{State, icons, roles, theme::Palette, widgets};
 
 pub(super) type Action = Rc<dyn Fn(&mut State)>;
+type RecordRetry = Rc<dyn Fn(&mut State, &mut Tx)>;
 
 #[derive(Clone, Copy, Default)]
 pub(super) enum Cursor {
@@ -45,6 +46,8 @@ pub(super) enum Save<'a> {
     Idle,
     Pending(Duration),
     Failed(&'a str, Action),
+    RecordFailed(&'a str, RecordRetry),
+    Retrying,
 }
 #[derive(Default)]
 pub(super) struct Row<'a> {
@@ -142,18 +145,30 @@ fn date_style(p: Palette, done: bool, urgency: Urgency) -> (Color, f32) {
 }
 
 fn save_line(save: Save<'_>, p: Palette) -> Option<El> {
+    let retry_action = |error| {
+        widgets::notice_action("Try again", p)
+            .focus_ring(1.0, 0.0, p.line)
+            .help(error)
+    };
     let line = match save {
-        Save::Pending(elapsed) if elapsed >= Duration::from_secs(1) => {
+        Save::Pending(elapsed) if elapsed < Duration::from_secs(1) => return None,
+        Save::Pending(_) | Save::Retrying => {
             let icon = icons::draw(&icons::LOADER_CIRCLE, icons::INLINE, p.faint);
             let label = roles::CONTROL.wrap("Saving", p.faint).role("status");
             row().items_center().gap(6.0).child(icon).child(label)
         }
         Save::Failed(error, retry) => {
-            let action = widgets::notice_action("Try again", p).focus_ring(1.0, 0.0, p.line);
-            let action = widgets::retry_action(action.help(error), false, move |s| retry(s));
+            let action = widgets::retry_action(retry_action(error), false, move |s| retry(s));
             widgets::inline_notice("Not saved.", action, p)
         }
-        _ => return None,
+        Save::RecordFailed(error, retry) => {
+            let action = retry_action(error)
+                .key("retry")
+                .focusable(false)
+                .on_press_tx(move |s, tx| retry(s, tx));
+            widgets::inline_notice("Not saved.", action, p)
+        }
+        Save::Idle => return None,
     };
     Some(line.mt(4.0).key("save").transition(Transition::opacity()))
 }
@@ -224,16 +239,31 @@ fn copy() -> El {
 }
 
 pub(super) fn question_row(q: Row<'_>, details: &str, settled: bool, width: f32, p: Palette) -> El {
-    let (mark, ink, color): (&Icon, _, _) = match settled {
-        true => (&icons::DONE, p.faint, p.faint),
-        false => (&icons::CIRCLE_DASHED, p.soft, p.ink),
+    let kind = if settled {
+        Record::Settled
+    } else {
+        Record::Question
     };
-    let lines = if width < 600.0 { 4 } else { 3 };
-    let name = title(q.title, roles::SMALL, color, lines);
+    record_row(q, details, kind, width, p)
+}
+
+pub(super) enum Record {
+    Claim,
+    Question,
+    Settled,
+}
+
+pub(super) fn record_row(r: Row<'_>, details: &str, kind: Record, width: f32, p: Palette) -> El {
+    let (mark, ink, color, role, lines): (&Icon, _, _, _, _) = match kind {
+        Record::Claim => (&icons::CIRCLE, p.soft, p.ink, roles::NAME, 2),
+        Record::Question => (&icons::CIRCLE_DASHED, p.soft, p.ink, roles::SMALL, 3),
+        Record::Settled => (&icons::DONE, p.faint, p.faint, roles::SMALL, 3),
+    };
+    let name = title(r.title, role, color, lines + usize::from(width < 600.0));
     let body = copy().child(name);
     let details = (!details.is_empty()).then(|| meta(p, [(details, p.faint, 400.0)]));
-    let e = shell(&q, false, p).child(glyph(mark, ink).mt(1.5));
-    e.child(body.children(details).children(save_line(q.save, p)))
+    let e = shell(&r, false, p).child(glyph(mark, ink).mt(1.5));
+    e.child(body.children(details).children(save_line(r.save, p)))
 }
 
 pub(super) fn done_line(count: usize, open: bool, toggle: Action, p: Palette) -> El {

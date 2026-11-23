@@ -5,7 +5,7 @@ use super::{
     State,
     check::{copy_row, prose, source_rows},
     list::text_title,
-    roles,
+    roles, rows,
     tasks::{button, prop_row},
     theme::Palette,
     widgets::{
@@ -20,7 +20,7 @@ use sidenote::core::memory::{
     AcceptChoice, Basis, HistoryRow, MemoryEvent, MemoryRecord, MemorySource, MemoryStore,
     MigrationPreview, PendingProposal, ProposalOp, RecordStatus, RecordType, RevisionRequest,
 };
-use std::{collections::HashMap, io};
+use std::{collections::HashMap, io, rc::Rc};
 mod landing;
 pub(super) mod settled;
 
@@ -53,6 +53,14 @@ pub enum Before {
 pub enum Ask {
     Retire,
     Forget,
+}
+
+#[derive(Clone)]
+enum RecordWrite {
+    Confirm,
+    Retire,
+    Forget,
+    Undo(String),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -102,10 +110,12 @@ pub struct MemState {
     pub editing: bool,
     pub edit: TextEdit,
     pub edit_base: Option<MemoryRecord>,
+    edit_sent: Option<String>,
     pub editor_generation: u64,
     pub ask: Option<Ask>,
     /// Why an action failed, by record, proposal or `migration`.
     pub errors: HashMap<String, String>,
+    record_retries: HashMap<String, RecordWrite>,
     pub notice: Option<String>,
     pub refresh_pending: bool,
     refresh_generation: u64,
@@ -162,9 +172,11 @@ impl Default for MemState {
             editing: false,
             edit: TextEdit::default(),
             edit_base: None,
+            edit_sent: None,
             editor_generation: 0,
             ask: None,
             errors: HashMap::new(),
+            record_retries: HashMap::new(),
             notice: None,
             refresh_pending: false,
             refresh_generation: 0,
@@ -708,7 +720,7 @@ impl State {
 
     pub fn memory_confirm(&mut self, id: &str) {
         let r = MemoryStore::default().confirm_record(id);
-        self.memory_done(id, r);
+        self.record_saved(id, RecordWrite::Confirm, r);
     }
 
     pub fn memory_retire(&mut self, id: &str) {
@@ -716,27 +728,65 @@ impl State {
         #[cfg(target_os = "linux")]
         let _budget = sidenote::core::UiLockBudget::begin();
         let r = MemoryStore::default().retire_record(id);
-        self.memory.ask = None;
-        self.memory_done(id, r);
+        if self.memory.cursor.as_deref() == Some(id) {
+            self.memory.ask = None;
+        }
+        self.record_saved(id, RecordWrite::Retire, r);
     }
 
     pub fn memory_forget(&mut self, id: &str) {
         let r = MemoryStore::default().forget_record(id);
-        self.memory.ask = None;
-        if self.memory_done(id, r) {
+        let is_open = self.memory.panel && self.memory.cursor.as_deref() == Some(id);
+        if is_open {
+            self.memory.ask = None;
+        }
+        if self.record_saved(id, RecordWrite::Forget, r) && is_open {
             self.close_record();
+        }
+    }
+
+    fn record_saved(&mut self, id: &str, write: RecordWrite, result: io::Result<()>) -> bool {
+        if self.memory_done(id, result) {
+            self.memory.record_retries.remove(id);
+            true
+        } else {
+            self.memory.record_retries.insert(id.into(), write);
+            false
+        }
+    }
+
+    fn retry_record(&mut self, id: &str, tx: &mut Tx) {
+        if !self.memory.errors.contains_key(id) {
+            return;
+        }
+        match self.memory.record_retries.get(id).cloned() {
+            Some(RecordWrite::Confirm) => self.memory_confirm(id),
+            Some(RecordWrite::Retire) => self.memory_retire(id),
+            Some(RecordWrite::Forget) => self.memory_forget(id),
+            Some(RecordWrite::Undo(at)) => self.memory_undo(id, &at, tx),
+            None if self.memory.editing && self.memory.cursor.as_deref() == Some(id) => {
+                let text = self
+                    .memory
+                    .edit_sent
+                    .clone()
+                    .unwrap_or_else(|| self.memory.edit.text.clone());
+                self.save_memory_text(text);
+            }
+            None => {}
         }
     }
 
     pub fn cancel_memory_edit(&mut self) {
         if let Some(id) = &self.memory.cursor {
             self.memory.errors.remove(id);
+            self.memory.record_retries.remove(id);
         }
         self.memory.notice = None;
         self.memory.editor_generation += 1;
         self.memory.editing = false;
         self.memory.edit = TextEdit::default();
         self.memory.edit_base = None;
+        self.memory.edit_sent = None;
     }
     pub fn memory_edit_start(&mut self, id: &str) {
         let Some(text) = self.memory.record(id).and_then(|r| r.text.clone()) else {
@@ -744,6 +794,7 @@ impl State {
         };
         self.memory.editor_generation += 1;
         self.memory.edit_base = self.memory.record(id).cloned();
+        self.memory.edit_sent = None;
         self.memory.edit = TextEdit::new(&text);
         self.memory.edit.focused = true;
         self.memory.editing = true;
@@ -751,11 +802,19 @@ impl State {
     }
 
     pub fn memory_edit_save(&mut self) {
+        self.save_memory_text(self.memory.edit.text.clone());
+    }
+
+    fn save_memory_text(&mut self, text: String) {
         let Some(id) = self.memory.cursor.clone() else {
             return;
         };
-        let text = self.memory.edit.text.clone();
+        if self.edit_busy {
+            return;
+        }
+        self.memory.record_retries.remove(&id);
         if text.trim().is_empty() {
+            self.memory.edit_sent = None;
             self.memory
                 .errors
                 .insert(id, "A claim needs some text.".into());
@@ -768,9 +827,7 @@ impl State {
         if self.memory.cursor.as_deref() != Some(base.id.as_str()) {
             return;
         }
-        if self.edit_busy {
-            return;
-        }
+        self.memory.edit_sent = Some(text.clone());
         self.publish_edit(super::edit_worker::Job::Memory {
             store: MemoryStore::default(),
             base: Box::new(base),
@@ -806,7 +863,7 @@ impl State {
             self.cancel_rewrite(&id);
         }
         let result = MemoryStore::default().undo_event(record, at);
-        if self.memory_done(record, result) {
+        if self.record_saved(record, RecordWrite::Undo(at.into()), result) {
             self.memory.result = None;
             self.show_toast("Change undone. The previous memory is restored.", tx);
         }
@@ -967,78 +1024,50 @@ fn row_shell(
     line
 }
 
-fn record_row(s: &State, r: &MemoryRecord, _lay: Lay, p: Palette) -> El {
-    let m = &s.memory;
-    let selected = m.panel && m.cursor.as_deref() == Some(r.id.as_str());
-    let at_cursor = m.keyboard && m.cursor.as_deref() == Some(r.id.as_str()) && !selected;
+fn record_row(m: &MemState, r: &MemoryRecord, width: f32, edit_busy: bool, p: Palette) -> El {
+    let at_cursor = m.cursor.as_deref() == Some(r.id.as_str());
+    let cursor = if m.panel && at_cursor {
+        rows::Cursor::Selected
+    } else if m.keyboard && at_cursor {
+        rows::Cursor::Keyboard
+    } else {
+        rows::Cursor::Rest
+    };
+    let kind = if matches!(r.status, RecordStatus::Retired | RecordStatus::Superseded) {
+        rows::Record::Settled
+    } else if r.record_type == RecordType::Question {
+        rows::Record::Question
+    } else {
+        rows::Record::Claim
+    };
     let claim = plain(r.text.as_deref().unwrap_or_default());
-    let ink = if r.status == RecordStatus::Active {
-        p.ink
-    } else {
-        p.faint
-    };
-    let mut meta = row()
-        .w_full()
-        .min_w(0.0)
-        .flex_wrap()
-        .gap(8.0)
-        .items_center();
-    if let Some(project) = &r.project {
-        meta = meta.child(roles::META.line(project, p.faint).min_w(0.0).shrink());
-    }
-    if r.last_confirmed.as_deref().and_then(parse_day).is_some() {
-        meta = meta.child(roles::META.wrap(confirmed_text(r), p.faint));
-    } else {
-        meta = meta.child(
-            row()
-                .gap(4.0)
-                .items_center()
-                .key(format!("memory-unconfirmed-{}", r.id))
-                .child(super::icons::draw(&super::icons::HELP, 16.0, p.faint))
-                .child(roles::META.wrap("Not confirmed", p.faint))
-                .help("This claim has not been confirmed by you"),
-        );
-    }
+    let mut details = Vec::new();
+    details.extend(r.project.iter().cloned());
+    details.push(confirmed_text(r));
     if r.sources.len() >= 2 {
-        meta = meta.child(
-            roles::META
-                .wrap(plural(r.sources.len(), "source", "sources"), p.faint)
-                .key(format!("memory-source-count-{}", r.id)),
-        );
+        details.push(plural(r.sources.len(), "source", "sources"));
     }
-    let mut content = super::cards::row_shell().child(
-        col()
-            .grow(1.0)
-            .min_w(0.0)
-            .gap(4.0)
-            .child(
-                roles::SMALL
-                    .medium()
-                    .line(&claim, ink)
-                    .w_full()
-                    .help(&claim),
-            )
-            .child(meta),
-    );
-    let matches_filter = match m.scope {
-        Scope::Active => r.status == RecordStatus::Active,
-        Scope::Retired => matches!(r.status, RecordStatus::Retired | RecordStatus::Superseded),
-        Scope::NeedsReview => false,
+    let id = r.id.clone();
+    let save = if let Some(error) = m.errors.get(&id) {
+        if m.editing && at_cursor && edit_busy && m.edit_sent.is_some() {
+            rows::Save::Retrying
+        } else {
+            let retry_id = id.clone();
+            rows::Save::RecordFailed(error, Rc::new(move |s, tx| s.retry_record(&retry_id, tx)))
+        }
+    } else {
+        rows::Save::Idle
     };
-    if !matches_filter {
-        content = content.child(status_badge(r.status, p));
-    }
-    row_shell(
-        content,
-        format!("mrow-{}", r.id),
-        format!("Open the claim: {claim}"),
-        selected,
-        at_cursor,
-        r.id.clone(),
-        p,
-    )
-    .px(14.0)
-    .radius(0.0)
+    let data = rows::Row {
+        title: &claim,
+        cursor,
+        interactive: true,
+        save,
+    };
+    rows::record_row(data, &details.join(" · "), kind, width, p)
+        .key(format!("mrow-{id}"))
+        .label(format!("Open the claim: {claim}"))
+        .on_press(move |s: &mut State| s.open_record(&id))
 }
 
 fn proposal_row(s: &State, pp: &PendingProposal, lay: Lay, p: Palette) -> El {
@@ -1324,7 +1353,7 @@ fn empty_note(head: &str, body: &str, p: Palette) -> El {
         .child(roles::SMALL.wrap(body, p.soft))
 }
 
-fn record_list(s: &State, lay: Lay, p: Palette) -> El {
+fn record_list(s: &State, width: f32, p: Palette) -> El {
     let m = &s.memory;
     let recs = m.sorted_records();
     if recs.is_empty() {
@@ -1383,14 +1412,14 @@ fn record_list(s: &State, lay: Lay, p: Palette) -> El {
             out = out.child(g);
             continue;
         }
-        let mut card = super::cards::panel(p).key(format!("memory-group-{kind:?}"));
+        let mut rows = col().w_full().key(format!("memory-group-{kind:?}"));
         for (index, r) in of.into_iter().enumerate() {
             if index > 0 {
-                card = card.child(hairline(p));
+                rows = rows.child(rows::Density::Rail.separator(width, p));
             }
-            card = card.child(record_row(s, r, lay, p));
+            rows = rows.child(record_row(m, r, width, s.edit_busy, p));
         }
-        g = g.child(card);
+        g = g.child(rows);
         out = out.child(g);
     }
     out
@@ -1515,7 +1544,7 @@ fn list_column(
         doc = doc.child(if m.tab == Tab::Review {
             proposal_list(s, lay, p)
         } else {
-            record_list(s, lay, p)
+            record_list(s, list_w.min(920.0) - 2.0 * side, p)
         });
         let forgotten = m
             .records
@@ -1793,7 +1822,15 @@ fn record_panel(s: &State, k: &Kit, r: &MemoryRecord, overlay: bool, p: Palette)
         .child(hairline(p))
         .child(history_block(s, r, p));
     if let Some(e) = m.errors.get(&r.id) {
-        body = body.child(roles::SMALL.medium().wrap(e, p.warn).role("alert"));
+        let retry_id = id.clone();
+        body = body
+            .child(roles::SMALL.medium().wrap(e, p.warn).role("alert"))
+            .child(
+                super::widgets::notice_action("Try again", p)
+                    .key("mem-save-retry")
+                    .self_start()
+                    .on_press_tx(move |s: &mut State, tx| s.retry_record(&retry_id, tx)),
+            );
     }
 
     let mut foot = col().w_full().px(16.0).py(12.0).gap(8.0);
@@ -2379,6 +2416,84 @@ mod refresh_tests {
             "updated_at": "2026-11-01T00:00:00Z", "source_fingerprint": "synthetic"
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn record_rows_render_question_settled_and_failed_states_with_one_tab_stop_each() {
+        let mut question = synthetic_record("question", RecordType::Question, "Workshop");
+        question.sources = ["[[demo]]", "[[sample]]"]
+            .map(|reference| MemorySource::Meeting {
+                reference: reference.into(),
+            })
+            .into();
+        let mut retired = synthetic_record("retired", RecordType::Decision, "Workshop");
+        retired.status = RecordStatus::Retired;
+        let mut replaced = synthetic_record("replaced", RecordType::Question, "Workshop");
+        replaced.status = RecordStatus::Superseded;
+        let memory = MemState {
+            cursor: Some(question.id.clone()),
+            keyboard: true,
+            errors: HashMap::from([(question.id.clone(), "The write failed.".into())]),
+            records: vec![question, retired, replaced],
+            ..Default::default()
+        };
+        let p = super::super::theme::palette(false);
+        let view = |m: &MemState, _: &mut rune::Cx<MemState>| {
+            let p = super::super::theme::palette(false);
+            col()
+                .w_full()
+                .children(m.records.iter().map(|r| record_row(m, r, 390.0, false, p)))
+        };
+        let mut rt = rune::Runtime::new(memory, view, (390.0, 350.0), rune::Env::default());
+        rt.frame(0.0);
+        let nodes = rt.elements();
+        for (key, glyph, fill, ink) in [
+            ("mrow-question", "lucide-circle-dashed", p.chip, p.ink),
+            (
+                "mrow-retired",
+                "lucide-circle-check",
+                rune::Color::TRANSPARENT,
+                p.faint,
+            ),
+            (
+                "mrow-replaced",
+                "lucide-circle-check",
+                rune::Color::TRANSPARENT,
+                p.faint,
+            ),
+        ] {
+            let row = nodes
+                .iter()
+                .find(|n| n.key.as_deref() == Some(key))
+                .unwrap();
+            let parts: Vec<_> = nodes
+                .iter()
+                .filter(|n| n.path.starts_with(&row.path))
+                .collect();
+            assert!(row.focusable);
+            assert_eq!(row.fill, fill);
+            assert_eq!(parts.iter().filter(|n| n.focusable).count(), 1);
+            assert!(parts.iter().any(|n| n.trace_name == Some(glyph)));
+            assert!(
+                parts
+                    .iter()
+                    .any(|n| n.key.as_deref() == Some("title") && n.text_color == Some(ink))
+            );
+        }
+        assert!(
+            nodes
+                .iter()
+                .any(|n| n.text.as_deref() == Some("Workshop · Not confirmed · 2 sources"))
+        );
+        assert!(
+            nodes
+                .iter()
+                .any(|n| n.text.as_deref() == Some("Not saved."))
+        );
+        assert!(
+            nodes.iter().any(|n| n.key.as_deref() == Some("retry")
+                && n.help.as_deref() == Some("The write failed."))
+        );
     }
 
     #[test]
