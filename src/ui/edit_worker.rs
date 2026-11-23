@@ -147,13 +147,7 @@ pub enum Job {
         task: Box<core::TaskItem>,
         source: PathBuf,
         intent: core::MoveIntent,
-    },
-    ListTick {
-        store: TaskStore,
-        ticks: core::StateStore,
-        task: Box<core::TaskItem>,
-        on: bool,
-        attempt: TickAttempt,
+        tick: Option<TickAttempt>,
     },
     Grouping {
         store: TaskStore,
@@ -198,17 +192,26 @@ pub enum Job {
     },
 }
 impl Job {
+    fn list_tick(&self) -> Option<&TickAttempt> {
+        match self {
+            Self::Move { tick, .. } => tick.as_ref().filter(|attempt| attempt.from_list),
+            _ => None,
+        }
+    }
+
     fn target(&self) -> Target {
         match self {
             Self::Company { .. }
             | Self::Tick { .. }
             | Self::ManualTick { .. }
             | Self::V2 { .. }
-            | Self::Move { .. }
             | Self::Grouping { .. }
             | Self::TeamEdit { .. }
             | Self::Redo { .. } => Target::Tick,
-            Self::ListTick { attempt, .. } => Target::ListTick(attempt.clone()),
+            Self::Move { .. } => self
+                .list_tick()
+                .cloned()
+                .map_or(Target::Tick, Target::ListTick),
             Self::Task {
                 row,
                 index,
@@ -267,8 +270,8 @@ impl Completion {
             | Self::ManualTick(_)
             | Self::Preferences { .. }
             | Self::V2 { .. }
+            | Self::Move { .. }
             | Self::Redo(_) => Target::Tick,
-            Self::Move { tick, .. } => tick.clone().map_or(Target::Tick, Target::ListTick),
             Self::Task {
                 row,
                 index,
@@ -308,17 +311,22 @@ impl Job {
     /// Folds a move into a waiting move of the same card: one save for what the user chose last,
     /// with the status from before still applying where the later move names none.
     fn absorb_move(&mut self, next: &Job) -> bool {
+        if self.list_tick().is_some() || next.list_tick().is_some() {
+            return false;
+        }
         let (
             Self::Move {
                 task,
                 intent,
                 source,
+                tick,
                 ..
             },
             Self::Move {
                 task: newer,
                 intent: later,
                 source: newer_source,
+                tick: later_tick,
                 ..
             },
         ) = (self, next)
@@ -337,6 +345,9 @@ impl Job {
         }
         *intent = intent.then(*later);
         *task = newer.clone();
+        if later_tick.is_some() {
+            tick.clone_from(later_tick);
+        }
         if !newer_source.as_os_str().is_empty() {
             source.clone_from(newer_source);
         }
@@ -365,11 +376,11 @@ impl State {
                     .edit_queue
                     .waiting
                     .iter()
-                    .any(|job| !matches!(job, Job::ListTick { .. })))
+                    .any(|job| job.list_tick().is_none()))
     }
 
     fn start_edit(&mut self, job: Job) {
-        self.tasks.list_tick_running = matches!(&job, Job::ListTick { .. });
+        self.tasks.list_tick_running = job.list_tick().is_some();
         let mut guard = Guard {
             target: Some(job.target()),
             events: self.events_tx.clone(),
@@ -411,34 +422,14 @@ impl State {
                         task,
                         source,
                         intent,
+                        tick,
                     } => {
                         let (moved, error) = core::run_move(&store, &ticks, &task, &source, intent);
                         Completion::Move {
                             id: task.meeting_id.clone(),
                             moved: Box::new(moved),
                             error: error.map(|e| SaveError::from(&e)),
-                            tick: None,
-                        }
-                    }
-                    Job::ListTick {
-                        store,
-                        ticks,
-                        task,
-                        on,
-                        attempt,
-                    } => {
-                        let (moved, error) = core::run_move(
-                            &store,
-                            &ticks,
-                            &task,
-                            std::path::Path::new(""),
-                            core::MoveIntent::tick(on),
-                        );
-                        Completion::Move {
-                            id: task.meeting_id,
-                            moved: Box::new(moved),
-                            error: error.map(|e| SaveError::from(&e)),
-                            tick: Some(attempt),
+                            tick,
                         }
                     }
                     Job::Grouping { store, by } => Completion::Preferences {
@@ -647,9 +638,13 @@ impl State {
                         self.tasks.overrides = view.value;
                     }
                 }
+                let list_tick = tick.as_ref().is_some_and(|attempt| attempt.from_list);
                 if let Some(attempt) = tick {
-                    self.finish_list_tick(attempt, error);
-                } else if let Some(e) = error {
+                    self.finish_task_tick(attempt, newest, error);
+                }
+                if let Some(e) = error
+                    && !list_tick
+                {
                     self.tasks.notice = Some(e.message().into());
                 }
                 self.rebuild_tasks();
@@ -668,11 +663,12 @@ impl State {
             }
             Completion::Failed(Target::ListTick(attempt)) => {
                 let stopped = SaveError::WorkerStopped;
-                self.finish_list_tick(attempt, Some(stopped));
+                self.finish_task_tick(attempt, None, Some(stopped));
                 self.tasks.notice = Some(stopped.message().into());
                 if self.view != super::tasks::View::Tasks {
                     self.notice = Some(stopped.message().into());
                 }
+                self.rebuild_tasks();
             }
             Completion::Task {
                 row,
