@@ -402,6 +402,8 @@ pub enum Eligibility {
 pub enum Phase {
     Deleting,
     Deleted,
+    Restoring,
+    Restored,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -419,6 +421,8 @@ pub enum MoveEvent {
     Recorded(usize),
     SyncMove(usize, bool),
     Finished(Phase),
+    Unhide(WriteStage),
+    Unhidden,
 }
 
 #[derive(Debug)]
@@ -477,7 +481,12 @@ impl Storage {
     }
 
     pub fn receipt(&self, id: &str) -> io::Result<Receipt> {
-        let (seal, data): (String, Receipt) = read(&self.transaction(id)?.join("receipt.json"))?;
+        let path = self.transaction(id)?.join("receipt.json");
+        let m = metadata(&path)?
+            .filter(fs::Metadata::is_file)
+            .ok_or_else(invalid)?;
+        identity(&path, &m)?;
+        let (seal, data): (String, Receipt) = read(&path)?;
         if seal != blake3::hash(&serde_json::to_vec(&data)?).to_hex().as_str()
             || data.transaction != id
         {
@@ -702,17 +711,31 @@ impl Storage {
         receipt: &mut Receipt,
         moved: &mut impl FnMut(MoveEvent) -> io::Result<()>,
     ) -> io::Result<()> {
+        if receipt.phase == Phase::Restored {
+            return self.unsuppress(receipt, moved);
+        }
+        let deleting = receipt.phase == Phase::Deleting;
+        let starting_restore = receipt.phase == Phase::Deleted;
         let dir = self.transaction(&receipt.transaction)?;
         let volume = self.volume()?;
         let mut work = Vec::new();
         for (index, member) in receipt.members.iter().enumerate() {
+            if !deleting && !receipt.moved[index] {
+                continue;
+            }
             let original = self.state_path(&member.relative)?;
             let recycled = Self::recycled(&dir, index);
-            let from = original;
-            let to = recycled;
+            let (from, to) = if deleting {
+                (original, recycled)
+            } else {
+                (recycled, original)
+            };
+            if starting_restore && metadata(&to)?.is_some() {
+                return Err(io::ErrorKind::AlreadyExists.into());
+            }
             let source = expected_member(&from, member)?;
             let target = inspect(&to, volume)?;
-            let pending = match (source, target, receipt.moved[index]) {
+            let pending = match (source, target, receipt.moved[index] == deleting) {
                 (true, None, false) => true,
                 (false, Some(key), _) if key == member.identity => false,
                 _ => return Err(invalid()),
@@ -724,29 +747,98 @@ impl Storage {
             work.push((index, from, to, pending));
         }
 
+        if starting_restore {
+            receipt.phase = Phase::Restoring;
+            self.journal(receipt, moved)?;
+            moved(MoveEvent::Receipt)?;
+        }
         self.suppress(receipt, moved)?;
         moved(MoveEvent::Suppressed)?;
         for (index, from, to, pending) in work {
-            if !receipt.moved[index] {
+            if receipt.moved[index] != deleting {
                 let member = &receipt.members[index];
                 move_member(&from, &to, member, pending, index, moved)?;
-                receipt.moved[index] = true;
+                receipt.moved[index] = deleting;
                 self.journal(receipt, moved)?;
                 moved(MoveEvent::Recorded(index))?;
             }
         }
-        receipt.phase = Phase::Deleted;
+        receipt.phase = if deleting {
+            Phase::Deleted
+        } else {
+            Phase::Restored
+        };
         self.journal(receipt, moved)?;
-        moved(MoveEvent::Finished(receipt.phase))
+        moved(MoveEvent::Finished(receipt.phase))?;
+        if !deleting {
+            self.unsuppress(receipt, moved)?;
+        }
+        Ok(())
     }
 
     pub fn recover(&self, id: &str) -> io::Result<Phase> {
         let _lock = self.lock()?;
         let mut receipt = self.receipt(id)?;
         let _claims = self.claims(&receipt.ids)?;
-        if receipt.phase == Phase::Deleting {
+        if matches!(
+            receipt.phase,
+            Phase::Deleting | Phase::Restoring | Phase::Restored
+        ) {
             self.resume(&mut receipt, &mut |_| Ok(()))?;
         }
         Ok(receipt.phase)
+    }
+    pub fn restore(&self, id: &str) -> io::Result<()> {
+        self.restore_checked(id, |_| Ok(()))
+    }
+
+    pub fn restore_checked(
+        &self,
+        id: &str,
+        mut checkpoint: impl FnMut(MoveEvent) -> io::Result<()>,
+    ) -> io::Result<()> {
+        let _lock = self.lock()?;
+        let mut receipt = self.receipt(id)?;
+        let _claims = self.claims(&receipt.ids)?;
+        match receipt.phase {
+            Phase::Deleted | Phase::Restoring | Phase::Restored => {
+                self.resume(&mut receipt, &mut checkpoint)
+            }
+            _ => Err(invalid()),
+        }
+    }
+
+    fn unsuppress(
+        &self,
+        receipt: &Receipt,
+        checkpoint: &mut impl FnMut(MoveEvent) -> io::Result<()>,
+    ) -> io::Result<()> {
+        let path = suppression_path(&self.state);
+        let mut ids: Suppression = store_io::read(&path)?;
+        ids.retain(|_, owner| owner != &receipt.transaction);
+        store_io::atomic_write_checked(&path, &Self::bounded(&ids)?, |stage| {
+            checkpoint(MoveEvent::Unhide(stage))
+        })?;
+        checkpoint(MoveEvent::Unhidden)
+    }
+
+    pub fn transactions(&self) -> io::Result<Vec<String>> {
+        let path = self.state.join("local/deleted-meetings");
+        let mut ids = Vec::new();
+        if metadata(&path)?.is_some() {
+            for entry in fs::read_dir(path)? {
+                let entry = entry?;
+                if let Some(id) = entry
+                    .file_name()
+                    .to_str()
+                    .filter(|id| super::device::valid_id(id))
+                    && metadata(&entry.path().join("receipt.json"))?.is_some()
+                {
+                    ids.push(id.to_owned());
+                }
+            }
+        }
+        ids.sort_unstable();
+        Ok(ids)
     }
 }
