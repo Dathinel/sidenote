@@ -773,7 +773,9 @@ impl State {
                 self.parts_start_failed();
             }
             Phase::Recording if running && !recording && !busy => self.live_stopped(),
-            Phase::Making if recording => {
+            // A cached Stop target cannot confirm that another recording began.
+            Phase::Making if matches!(&self.hex.status, Some(Ok(status)) if status.recording.is_some()) =>
+            {
                 // Another recording began while the notes were still being made.
                 let known = self.known_ids();
                 if self.live_begin(Phase::Recording, known) {
