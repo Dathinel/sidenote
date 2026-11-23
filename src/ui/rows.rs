@@ -1,5 +1,8 @@
 use rune::{Align, Color, Cx, El, Icon, Span, col, el, row};
-use rune_motion::{SETTLE, Spring, Transition, pair};
+use rune_motion::{
+    Spring, Transition,
+    tokens::{SETTLE, pair},
+};
 use sidenote::core::Urgency;
 use std::{rc::Rc, time::Duration};
 
