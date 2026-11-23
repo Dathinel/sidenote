@@ -149,6 +149,10 @@ pub enum Event {
         result: Result<project_merge::Completion, String>,
     },
     Edited(edit_worker::Completion),
+    MeetingRecycle {
+        generation: u64,
+        result: meeting_delete::RecycleResult,
+    },
     Update(sidenote::updates::Status),
     UpdateFinished(Result<sidenote::updates::Status, String>),
     ListenerFinished(Result<(), String>),
@@ -797,6 +801,7 @@ impl State {
 
     /// Back to the home list.
     pub fn go_home(&mut self) {
+        self.leave_delete_view();
         self.notice = None;
         response_time::superseded(std::mem::take(&mut self.annotations.response_time));
         response_time::superseded(std::mem::take(&mut self.tasks_response_time));
@@ -830,6 +835,7 @@ impl State {
     }
 
     pub fn select(&mut self, id: &str, tx: &mut Tx) {
+        self.leave_delete_view();
         let timing = Operation::new(TimedAction::Meeting);
         response_time::superseded(std::mem::take(&mut self.tasks_response_time));
         self.companies.open = false;
@@ -1561,6 +1567,9 @@ impl State {
             }
             Event::MemoryRewritten { id, result } => self.memory_rewritten(&id, result),
             Event::Edited(result) => self.edit_finished(result),
+            Event::MeetingRecycle { generation, result } => {
+                self.recycle_finished(generation, result)
+            }
             Event::Area {
                 generation,
                 refresh,
@@ -1994,6 +2003,7 @@ fn poll(s: &mut State, clock: f64, tx: &mut Tx) -> bool {
         *now = clock;
     }
     let (mut changed, _) = apply_pending(s, headless);
+    changed |= s.apply_recycle_result(tx);
     #[cfg(windows)]
     if window::meeting_icon::poll(s) {
         changed = true;
@@ -2510,7 +2520,7 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
     }
     if let Some((text, _)) = &s.toast {
         let action = if let Some(id) = s.delete_ui.undo.as_deref() {
-            Some(meeting_delete::undo_button(id, p))
+            Some(meeting_delete::undo_button(s, id, p))
         } else {
             s.memory.settle_toast_action.as_ref().map(|(id, redo)| {
                 let (id, redo) = (id.clone(), *redo);

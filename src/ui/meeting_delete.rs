@@ -1,4 +1,4 @@
-use super::{State, roles, theme::Palette, widgets};
+use super::{Event, State, nav, roles, theme::Palette, widgets};
 use chrono::{DateTime, Local, TimeDelta, Utc};
 use rune::{El, ScrollSpec, Tx, col, row};
 use sidenote::core::{
@@ -11,6 +11,7 @@ const RETENTION: TimeDelta = TimeDelta::days(30);
 const UNDO_FOR: Duration = Duration::from_secs(8);
 const RECYCLE_DIR: &str = "local/deleted-meetings";
 const OPEN_DELETED: &str = "open-deleted-meetings";
+const RESTORING: &str = "Restoring\u{2026}";
 
 enum Dialog {
     Confirm {
@@ -21,11 +22,37 @@ enum Dialog {
     Deleted(Vec<(String, Receipt)>),
 }
 
+type Position = (nav::Page, bool, nav::Filter);
+
+pub(crate) enum RecycleResult {
+    Deleted(String),
+    Restored(Option<Box<Meeting>>),
+    Failed {
+        refresh: bool,
+        message: &'static str,
+    },
+}
+
+struct Pending {
+    label: &'static str,
+    position: Option<Position>,
+    result: Option<RecycleResult>,
+}
+
+fn worker_failed() -> RecycleResult {
+    RecycleResult::Failed {
+        refresh: true,
+        message: "Sidenote could not finish. Reopen Sidenote to recover any unfinished changes.",
+    }
+}
+
 #[derive(Default)]
 pub(super) struct DeleteUi {
     dialog: Option<Dialog>,
     error: Option<&'static str>,
     pub(super) undo: Option<String>,
+    generation: u64,
+    pending: Option<Pending>,
     #[cfg(test)]
     enabled_in_fixture: bool,
 }
@@ -102,12 +129,16 @@ impl State {
     }
 
     fn close_delete_dialog(&mut self) {
-        self.delete_ui.dialog = None;
-        self.delete_ui.error = None;
+        if self.delete_ui.pending.is_none() {
+            self.leave_delete_view();
+        }
     }
 
     fn ask_to_delete(&mut self, id: &str, trigger: &str) {
         self.more_menu = None;
+        if self.delete_ui.pending.is_some() {
+            return;
+        }
         self.delete_ui.error = None;
         if let Some(m) = self.meetings.iter().find(|m| m.id == id) {
             self.delete_ui.dialog = Some(Dialog::Confirm {
@@ -126,7 +157,10 @@ impl State {
                 .then_some("Wait for your changes to save, then try again."))
     }
 
-    fn confirm_delete(&mut self, tx: &mut Tx) {
+    fn confirm_delete(&mut self) {
+        if self.delete_ui.pending.is_some() {
+            return;
+        }
         let Some(Dialog::Confirm { id, title, .. }) = &self.delete_ui.dialog else {
             return;
         };
@@ -142,27 +176,132 @@ impl State {
             self.delete_ui.error = Some(refusal);
             return;
         }
-        let result = std::fs::create_dir_all(&self.store.root)
-            .map_err(DeleteError::from)
-            .and_then(|()| core::recycle_meeting(meeting, false));
-        match result {
-            Ok(id) => {
-                self.close_delete_dialog();
-                self.remove_deleted_from_catalog();
-                self.show_toast_for("Meeting deleted", UNDO_FOR, tx);
-                self.delete_ui.undo = Some(id);
+        let meeting = meeting.clone();
+        let root = self.store.root.clone();
+        self.start_recycle("Deleting\u{2026}", move || {
+            match std::fs::create_dir_all(root)
+                .map_err(DeleteError::from)
+                .and_then(|()| core::recycle_meeting(&meeting, false))
+            {
+                Ok(id) => RecycleResult::Deleted(id),
+                Err(error) => RecycleResult::Failed {
+                    refresh: matches!(error, DeleteError::Partial { .. }),
+                    message: reason(error),
+                },
             }
-            Err(error) => {
-                let partial = matches!(error, DeleteError::Partial { .. });
-                self.delete_ui.error = Some(reason(error));
-                if partial {
-                    self.remove_deleted_from_catalog();
-                }
-            }
+        });
+    }
+
+    fn recycle_position(&self) -> Position {
+        (self.page(), self.on_live(), self.filter.clone())
+    }
+
+    pub(super) fn leave_delete_view(&mut self) {
+        self.delete_ui.dialog = None;
+        self.delete_ui.error = None;
+        if let Some(pending) = &mut self.delete_ui.pending {
+            pending.position = None;
         }
     }
 
-    fn remove_deleted_from_catalog(&mut self) {
+    fn start_recycle(
+        &mut self,
+        label: &'static str,
+        work: impl FnOnce() -> RecycleResult + Send + std::panic::UnwindSafe + 'static,
+    ) {
+        self.delete_ui.generation = self.delete_ui.generation.wrapping_add(1);
+        let generation = self.delete_ui.generation;
+        self.delete_ui.error = None;
+        self.delete_ui.pending = Some(Pending {
+            label,
+            position: Some(self.recycle_position()),
+            result: None,
+        });
+        let events = self.events_tx.clone();
+        let waker = self.waker.clone();
+        if std::thread::Builder::new()
+            .name("meeting-recycle".into())
+            .spawn(move || {
+                let result = std::panic::catch_unwind(work).unwrap_or_else(|_| worker_failed());
+                let _ = events.send(Event::MeetingRecycle { generation, result });
+                if let Some(waker) = waker {
+                    waker();
+                }
+            })
+            .is_err()
+        {
+            self.recycle_finished(generation, worker_failed());
+        }
+    }
+
+    pub(super) fn recycle_finished(&mut self, generation: u64, result: RecycleResult) {
+        if generation == self.delete_ui.generation
+            && let Some(pending) = &mut self.delete_ui.pending
+            && pending.result.is_none()
+        {
+            pending.result = Some(result);
+        }
+    }
+
+    pub(super) fn apply_recycle_result(&mut self, tx: &mut Tx) -> bool {
+        let Some(pending) = self
+            .delete_ui
+            .pending
+            .as_mut()
+            .filter(|p| p.result.is_some())
+        else {
+            return false;
+        };
+        let result = pending.result.take().unwrap();
+        let position = pending.position.take();
+        self.delete_ui.pending = None;
+        let current = position.as_ref() == Some(&self.recycle_position());
+        if !current {
+            self.leave_delete_view();
+        }
+        match result {
+            RecycleResult::Deleted(id) => {
+                self.leave_delete_view();
+                self.remove_deleted_from_catalog(current);
+                if current {
+                    self.show_toast_for("Meeting deleted", UNDO_FOR, tx);
+                    self.delete_ui.undo = Some(id);
+                }
+            }
+            RecycleResult::Restored(meeting) => {
+                self.leave_delete_view();
+                let restored = meeting.map(|meeting| {
+                    let id = meeting.id.clone();
+                    if !self.meetings.iter().any(|m| m.id == id) {
+                        self.meetings.push(*meeting);
+                        self.meetings.sort_by_key(|m| Reverse(m.started));
+                    }
+                    id
+                });
+                self.update_after_recycle();
+                if current {
+                    if let Some(id) = restored {
+                        self.select(&id, tx);
+                    }
+                    self.show_toast("Meeting restored", tx);
+                }
+            }
+            RecycleResult::Failed { refresh, message } => {
+                if refresh {
+                    self.remove_deleted_from_catalog(current);
+                }
+                if current {
+                    if self.delete_ui.dialog.is_none() {
+                        self.open_deleted();
+                    }
+                    self.delete_ui.error = Some(message);
+                }
+            }
+        }
+        true
+    }
+
+    fn remove_deleted_from_catalog(&mut self, current: bool) {
         let hidden = core::meeting_delete::suppressed_ids(&self.store.root);
         // An unreadable suppression catalog fails closed, matching refresh admission.
         self.meetings
@@ -177,7 +316,12 @@ impl State {
         self.tasks.items.retain(keep);
         self.tasks.items_changed();
         if self.selected.is_some() && self.current().is_none() {
-            self.go_home();
+            if current {
+                self.go_home();
+            } else {
+                self.selected = None;
+                self.saved = Default::default();
+            }
         }
         self.update_after_recycle();
     }
@@ -191,6 +335,9 @@ impl State {
     }
 
     fn open_deleted(&mut self) {
+        if self.delete_ui.pending.is_some() {
+            return;
+        }
         let root = &self.store.root;
         let result = (|| -> io::Result<_> {
             if !root.join(RECYCLE_DIR).try_exists()? {
@@ -214,38 +361,35 @@ impl State {
         self.delete_ui.dialog = Some(Dialog::Deleted(result.unwrap_or_default()));
     }
 
-    fn restore_deleted(&mut self, id: &str, tx: &mut Tx) {
-        let result = (|| {
-            let store = storage(&self.store.root)?;
-            let receipt = store.receipt(id)?;
-            if remaining_days(&receipt) == 0 {
-                return Err(io::Error::other("Restore period ended"));
-            }
-            store.restore(id)?;
-            Ok::<_, io::Error>(receipt.ids)
-        })();
-        match result {
-            Ok(ids) => {
-                let (meetings, _) =
-                    core::scan_catalog(&self.store.root, &core::meetings_dir(), &core::peers_dir());
-                let restored = meetings
-                    .iter()
-                    .find(|m| ids.contains(&m.id))
-                    .map(|m| m.id.clone());
-                self.meetings = meetings;
-                self.close_delete_dialog();
-                self.update_after_recycle();
-                if let Some(id) = restored {
-                    self.select(&id, tx);
-                }
-                self.show_toast("Meeting restored", tx);
-            }
-            Err(_) => {
-                self.open_deleted();
-                self.delete_ui.error =
-                    Some("Could not restore this meeting. It may have expired or be in use.");
-            }
+    fn restore_deleted(&mut self, id: &str) {
+        if self.delete_ui.pending.is_some() {
+            return;
         }
+        let id = id.to_owned();
+        let root = self.store.root.clone();
+        self.start_recycle(RESTORING, move || {
+            let result = (|| {
+                let store = storage(&root)?;
+                let receipt = store.receipt(&id)?;
+                if remaining_days(&receipt) == 0 {
+                    return Err(io::Error::other("Restore period ended"));
+                }
+                store.restore(&id)?;
+                let (meetings, _) =
+                    core::scan_catalog(&root, &core::meetings_dir(), &core::peers_dir());
+                Ok(meetings
+                    .into_iter()
+                    .find(|m| receipt.ids.contains(&m.id))
+                    .map(Box::new))
+            })();
+            match result {
+                Ok(meeting) => RecycleResult::Restored(meeting),
+                Err(_) => RecycleResult::Failed {
+                    refresh: false,
+                    message: "Could not restore this meeting. It may have expired or be in use.",
+                },
+            }
+        });
     }
 }
 
@@ -262,11 +406,20 @@ pub(super) fn list_button(p: Palette) -> El {
         .on_press(|s: &mut State| s.open_deleted())
 }
 
-pub(super) fn undo_button(id: &str, p: Palette) -> El {
+pub(super) fn undo_button(s: &State, id: &str, p: Palette) -> El {
     let id = id.to_owned();
-    widgets::action("Undo", p)
-        .key("delete-undo")
-        .on_press_tx(move |s: &mut State, tx| s.restore_deleted(&id, tx))
+    let pending = s.delete_ui.pending.as_ref().map(|p| p.label);
+    widgets::action(
+        if pending == Some(RESTORING) {
+            RESTORING
+        } else {
+            "Undo"
+        },
+        p,
+    )
+    .key("delete-undo")
+    .disabled(pending.is_some())
+    .on_press(move |s: &mut State| s.restore_deleted(&id))
 }
 
 pub(super) fn overlay(s: &State, p: Palette, layer: &mut Vec<El>) {
@@ -274,6 +427,7 @@ pub(super) fn overlay(s: &State, p: Palette, layer: &mut Vec<El>) {
         return;
     };
     let close = State::close_delete_dialog;
+    let pending = s.delete_ui.pending.as_ref().map(|p| p.label);
     let content = col().gap(12.0);
     let (label, trigger, content) = match dialog {
         Dialog::Confirm { title, trigger, .. } => (
@@ -281,12 +435,13 @@ pub(super) fn overlay(s: &State, p: Palette, layer: &mut Vec<El>) {
             trigger.as_str(),
             content
                 .child(roles::SECTION.wrap(format!("Delete {title}?"), p.ink))
-                .child(roles::READ.wrap("This meeting will leave Meetings, search, tasks and Ask on this device. You can restore it for 30 days from Deleted meetings.", p.body))
+                .child(roles::READ.wrap("This meeting will leave Meetings, search, tasks and Ask on this device. You can restore it for 30 days from Deleted meetings. Folder sync may affect copies on other devices.", p.body))
                 .child(roles::SMALL.wrap("Hex recordings, exports, earlier Ask answers, daily-check history and accepted memory are kept.", p.soft))
                 .child(row().gap(8.0).justify_end()
-                    .child(widgets::quiet_button("Cancel", "delete-cancel", p).on_press(close))
-                    .child(widgets::row_action("Delete meeting", "delete-confirm", p)
-                        .on_press_tx(|s: &mut State, tx| s.confirm_delete(tx)))),
+                    .child(widgets::quiet_button("Cancel", "delete-cancel", p)
+                        .disabled(pending.is_some()).on_press(close))
+                    .child(widgets::row_button(pending.unwrap_or("Delete meeting"), "delete-confirm", widgets::ButtonRole::Destructive, p)
+                        .disabled(pending.is_some()).on_press(State::confirm_delete))),
         ),
         Dialog::Deleted(rows) => (
             "Deleted meetings",
@@ -294,7 +449,9 @@ pub(super) fn overlay(s: &State, p: Palette, layer: &mut Vec<El>) {
             content
                 .child(row().gap(8.0).items_center()
                     .child(roles::SECTION.wrap("Deleted meetings", p.ink).grow(1.0))
-                    .child(widgets::quiet_button("Close", "deleted-close", p).on_press(close)))
+                    .child(widgets::quiet_button("Close", "deleted-close", p)
+                        .disabled(pending.is_some()).on_press(close)))
+                .children(pending.map(|label| roles::SMALL.wrap(label, p.soft).role("status")))
                 .children((rows.is_empty() && s.delete_ui.error.is_none()).then(|| roles::SMALL.wrap("No deleted meetings.", p.soft)))
                 .child(col().gap(8.0).max_h(420.0).scroll(ScrollSpec { stick_bottom: false })
                     .children(rows.iter().map(|(id, receipt)| {
@@ -308,8 +465,8 @@ pub(super) fn overlay(s: &State, p: Palette, layer: &mut Vec<El>) {
                                 .child(roles::TITLE.wrap(&receipt.title, p.ink))
                                 .child(roles::META.wrap(format!("Deleted {date} | {days} {} left", if days == 1 { "day" } else { "days" }), p.soft)))
                             .child(widgets::quiet_button("Restore", &format!("restore-{id}"), p)
-                                .disabled(days == 0)
-                                .on_press_tx(move |s: &mut State, tx| s.restore_deleted(&id, tx)))
+                                .disabled(days == 0 || pending.is_some())
+                                .on_press(move |s: &mut State| s.restore_deleted(&id)))
                     }))),
         ),
     };
@@ -378,8 +535,9 @@ mod tests {
             .unwrap();
         assert!(
             out.status.success(),
-            "{name}: {}",
-            String::from_utf8_lossy(&out.stdout)
+            "{name}:\n{}\n{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
         );
         true
     }
@@ -393,6 +551,11 @@ mod tests {
         crate::test_paths::isolate();
         fs::create_dir_all(core::state_dir()).unwrap();
         let now = Utc::now().timestamp_millis();
+        let id = write_meeting(now, TITLE);
+        (id, runtime(State::new()))
+    }
+
+    fn write_meeting(now: i64, title: &str) -> String {
         let id = format!("{now}-1");
         let folder = core::meetings_dir().join(&id);
         write(
@@ -404,11 +567,11 @@ mod tests {
         write(
             &folder.join("english-summary.json"),
             json!({
-                "title": TITLE, "todo": [{"task": "Publish the agenda", "owner": "You"}]
+                "title": title, "todo": [{"task": "Publish the agenda", "owner": "You"}]
             }),
         );
         fs::write(folder.join("notes.md"), "A synthetic note").unwrap();
-        (id, runtime(State::new()))
+        id
     }
 
     fn runtime(mut state: State) -> Runtime<State> {
@@ -438,6 +601,36 @@ mod tests {
         }
     }
 
+    fn next_recycle_event(state: &mut State) -> Event {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let event = state
+                .events_rx
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .expect("recycle worker finished");
+            if matches!(event, Event::MeetingRecycle { .. }) {
+                return event;
+            }
+            state.apply_event(event);
+        }
+    }
+
+    fn apply_recycle_event(rt: &mut Runtime<State>, event: Event) {
+        rt.update(|s, tx| {
+            s.apply_event(event);
+            assert!(s.apply_recycle_result(tx));
+        });
+        rt.settle_all();
+        rt.frame(0.0);
+    }
+
+    fn wait_recycle(rt: &mut Runtime<State>) {
+        if rt.state.delete_ui.pending.is_some() {
+            let event = next_recycle_event(&mut rt.state);
+            apply_recycle_event(rt, event);
+        }
+    }
+
     fn tap(rt: &mut Runtime<State>, key: &str) {
         let (x, y) = rt.find(key).unwrap_or_else(|| panic!("missing {key}"));
         rt.pointer_move(x, y);
@@ -459,6 +652,14 @@ mod tests {
 
     // One status reply per confirm, on an OS-assigned port under this test process's roots.
     fn hex_status(status: &str, id: &str) -> JoinHandle<()> {
+        hex_status_with(status, id, || {})
+    }
+
+    fn hex_status_with(
+        status: &str,
+        id: &str,
+        before_reply: impl FnOnce() + Send + 'static,
+    ) -> JoinHandle<()> {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         write(
             &core::meetings_dir()
@@ -495,6 +696,7 @@ mod tests {
                 serde_json::from_slice::<serde_json::Value>(&body_bytes).unwrap()["command"],
                 "status"
             );
+            before_reply();
             write!(
                 stream,
                 "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
@@ -517,6 +719,7 @@ mod tests {
         let (id, mut rt) = fixture();
         let hash = hex_hash(&id);
         rt.update(|s, tx| s.select(&id, tx));
+        rt.settle_all();
         rt.frame(0.0);
         confirm_from(&mut rt, &id, "meeting");
         tap(&mut rt, "delete-cancel");
@@ -526,6 +729,7 @@ mod tests {
             s.search = rune::TextEdit::new(TITLE);
             s.refresh_list();
         });
+        rt.settle_all();
         rt.frame(0.0);
         confirm_from(&mut rt, &id, "row");
         tap(&mut rt, "delete-cancel");
@@ -544,6 +748,7 @@ mod tests {
         confirm_from(&mut rt, &id, "row");
         let hex = hex_status("idle", &id);
         tap(&mut rt, "delete-confirm");
+        wait_recycle(&mut rt);
         assert!(rt.find("delete-undo").is_some());
         hex.join().unwrap();
         assert!(rt.state.meetings.is_empty());
@@ -553,6 +758,8 @@ mod tests {
         assert_eq!(hex_hash(&id), hash);
 
         tap(&mut rt, "delete-undo");
+
+        wait_recycle(&mut rt);
         assert_eq!(rt.state.current().unwrap().id, id);
         wait_tasks(&mut rt.state);
         assert!(rt.state.tasks.all.iter().any(|t| t.meeting_id == id));
@@ -569,6 +776,7 @@ mod tests {
         confirm_from(&mut rt, &id, "row");
         let hex = hex_status("idle", &id);
         tap(&mut rt, "delete-confirm");
+        wait_recycle(&mut rt);
         let transaction = rt.state.delete_ui.undo.clone().unwrap();
         hex.join().unwrap();
         drop(rt);
@@ -582,6 +790,7 @@ mod tests {
                 .any(|e| e.text.as_deref() == Some(TITLE))
         );
         tap(&mut rt, &format!("restore-{transaction}"));
+        wait_recycle(&mut rt);
         assert_eq!(rt.state.current().unwrap().id, id);
         assert_eq!(hex_hash(&id), hash);
     }
@@ -642,6 +851,7 @@ mod tests {
             rt.state.live = Some(live);
             rt.state.live_notes = rune::TextEdit::new(text);
             tap(&mut rt, "delete-confirm");
+            wait_recycle(&mut rt);
             assert_eq!(
                 rt.state.delete_ui.error,
                 Some(reason(DeleteError::Refused(expected)))
@@ -653,6 +863,7 @@ mod tests {
         for status in ["recording", "paused", "finishing"] {
             let hex = hex_status(status, &id);
             tap(&mut rt, "delete-confirm");
+            wait_recycle(&mut rt);
             assert!(rt.find("meeting-delete-error").is_some());
             hex.join().unwrap();
         }
@@ -664,6 +875,7 @@ mod tests {
         write(&queued, json!({}));
         let hex = hex_status("idle", &id);
         tap(&mut rt, "delete-confirm");
+        wait_recycle(&mut rt);
         assert_eq!(
             rt.state.delete_ui.error,
             Some(reason(DeleteError::Refused(Eligibility::Processing)))
@@ -684,6 +896,7 @@ mod tests {
         );
         let hex = hex_status("idle", &id);
         tap(&mut rt, "delete-confirm");
+        wait_recycle(&mut rt);
         assert_eq!(
             rt.state.delete_ui.error,
             Some(reason(DeleteError::Refused(Eligibility::Processing)))
@@ -692,6 +905,7 @@ mod tests {
         fs::remove_file(notes_job).unwrap();
         rt.state.meetings[0].device = Some("Synthetic peer".into());
         tap(&mut rt, "delete-confirm");
+        wait_recycle(&mut rt);
         assert_eq!(
             rt.state.delete_ui.error,
             Some(reason(DeleteError::Refused(Eligibility::Peer)))
@@ -703,6 +917,128 @@ mod tests {
                 .transactions()
                 .unwrap()
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn pending_confirm_runs_once_and_undo_targets_the_latest_delete() {
+        if in_parent("pending_confirm_runs_once_and_undo_targets_the_latest_delete") {
+            return;
+        }
+        let (first, rt) = fixture();
+        let second = write_meeting(Utc::now().timestamp_millis() - 1000, "Second workshop");
+        drop(rt);
+        let mut rt = runtime(State::new());
+        rt.update(|s, tx| s.select(&first, tx));
+        rt.settle_all();
+        rt.frame(0.0);
+        confirm_from(&mut rt, &first, "meeting");
+
+        let (release, held) = std::sync::mpsc::channel();
+        let hex = hex_status_with("idle", &first, move || {
+            held.recv_timeout(Duration::from_millis(500)).unwrap();
+        });
+        rt.update(|s, _| s.confirm_delete());
+        let generation = rt.state.delete_ui.generation;
+        assert!(rt.state.delete_ui.pending.is_some());
+        rt.update(|s, _| s.confirm_delete());
+        assert_eq!(rt.state.delete_ui.generation, generation);
+        assert!(
+            storage(&rt.state.store.root)
+                .unwrap()
+                .transactions()
+                .unwrap()
+                .is_empty()
+        );
+        release.send(()).unwrap();
+        let completed = next_recycle_event(&mut rt.state);
+        hex.join().unwrap();
+
+        let options = rt.state.refresh_options();
+        rt.state.apply_event(Event::Refreshed(refresh::Result {
+            generation: core::mutation_generation(),
+            options,
+            data: Some(Box::new(refresh::Data::read(options))),
+        }));
+        assert!(
+            rt.state.selected.is_none(),
+            "refresh dropped the deleted selection"
+        );
+        apply_recycle_event(&mut rt, completed);
+
+        let first_transaction = rt.state.delete_ui.undo.clone().unwrap();
+        rt.update(|s, tx| {
+            s.apply_event(Event::MeetingRecycle {
+                generation,
+                result: RecycleResult::Deleted("duplicate".into()),
+            });
+            assert!(!s.apply_recycle_result(tx));
+        });
+        assert_eq!(
+            rt.state.delete_ui.undo.as_deref(),
+            Some(first_transaction.as_str())
+        );
+
+        tap(&mut rt, &format!("more-row-{second}-button"));
+        tap(&mut rt, "delete-meeting");
+        let hex = hex_status("idle", &second);
+        tap(&mut rt, "delete-confirm");
+        wait_recycle(&mut rt);
+        hex.join().unwrap();
+        assert_eq!(
+            storage(&rt.state.store.root)
+                .unwrap()
+                .transactions()
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_ne!(
+            rt.state.delete_ui.undo.as_deref(),
+            Some(first_transaction.as_str())
+        );
+        tap(&mut rt, "delete-undo");
+        wait_recycle(&mut rt);
+        assert_eq!(rt.state.current().unwrap().id, second);
+        assert!(
+            core::meeting_delete::suppressed_ids(&rt.state.store.root)
+                .unwrap()
+                .contains(&first)
+        );
+
+        rt.update(|s, _| s.go_home());
+        rt.frame(0.0);
+        tap(&mut rt, OPEN_DELETED);
+        tap(&mut rt, &format!("restore-{first_transaction}"));
+        wait_recycle(&mut rt);
+        assert_eq!(rt.state.current().unwrap().id, first);
+        assert_eq!(rt.state.meetings.len(), 2);
+    }
+
+    #[test]
+    fn late_delete_result_updates_catalog_without_taking_over_navigation() {
+        if in_parent("late_delete_result_updates_catalog_without_taking_over_navigation") {
+            return;
+        }
+        let (id, rt) = fixture();
+        let other = write_meeting(Utc::now().timestamp_millis() - 1000, "Other workshop");
+        drop(rt);
+        let mut rt = runtime(State::new());
+        confirm_from(&mut rt, &id, "row");
+        let hex = hex_status("idle", &id);
+        rt.update(|s, _| s.confirm_delete());
+        assert!(rt.state.delete_ui.pending.is_some());
+        rt.update(|s, tx| s.select(&other, tx));
+        wait_recycle(&mut rt);
+        hex.join().unwrap();
+        assert_eq!(rt.state.current().unwrap().id, other);
+        assert!(rt.state.delete_ui.dialog.is_none());
+        assert!(rt.state.delete_ui.undo.is_none());
+        assert_eq!(rt.state.meetings.len(), 1);
+        assert!(
+            core::meeting_delete::suppressed_ids(&rt.state.store.root)
+                .unwrap()
+                .contains(&id)
         );
     }
 
@@ -723,6 +1059,7 @@ mod tests {
         rt.state.live_notes = rune::TextEdit::new("Unrelated live notes");
         let hex = hex_status("recording", "123-2");
         tap(&mut rt, "delete-confirm");
+        wait_recycle(&mut rt);
         assert!(rt.find("delete-undo").is_some());
         hex.join().unwrap();
         rt.state.apply_event(Event::Refreshed(refresh::Result {

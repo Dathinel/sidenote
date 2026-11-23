@@ -435,13 +435,13 @@
 
   "src/ui/mcp_connect.rs": "b7372660109d111f146b60c90b4a3387c66b2e9eebdc0332ac2bc07034cbba20",
 
-  "src/ui/meeting_delete.rs": "eecdc53dd57468d76e1bf858636f0cdf9ad0e02ec6d6cba5107e953d8b6613df",
+  "src/ui/meeting_delete.rs": "88cdf0d8b2fd06cdda3809903725b5e0fc31a16170da0c1ef40a113b251f0fc7",
 
   "src/ui/memory.rs": "7414eb22f15f02acfbd80d3595c000712abe5b8c905832b7daa6777fa6a110e6",
 
   "src/ui/memory/settled.rs": "9d0915dfa235083870103a6872b2fc6e23c267328989d288b2299e1e0e460b58",
 
-  "src/ui/mod.rs": "d7f96a1176c15b64168932d4a4e37f263aa0e88b2bb9f43a7f8754fbf74b7290",
+  "src/ui/mod.rs": "f1de47b83200c09161e98a36f41b8b2ee0a06ea4804a9825454da0c226431c7f",
 
   "src/ui/models.rs": "eb6ea41c084af0bdb6ec17cdf7a2fad8e4f812d859351e73b05fac2ccbd703f9",
 
