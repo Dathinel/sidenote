@@ -83,7 +83,8 @@ impl std::fmt::Display for HexFailure {
     }
 }
 impl std::error::Error for HexFailure {}
-pub(super) type Result<T> = std::result::Result<T, HexFailure>;
+type Result<T> = HexResult<T>;
+pub(super) type HexResult<T> = std::result::Result<T, HexFailure>;
 #[derive(Debug, PartialEq)]
 pub struct HexReading {
     pub request: HexRequest,

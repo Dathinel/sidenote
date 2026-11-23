@@ -8,7 +8,7 @@ const FIXTURE: &str = "SIDENOTE_ROUTING_PAUSE_FIXTURE";
 
 struct Status<'a>(&'a str);
 impl hex_bridge::HexCommand for Status<'_> {
-    fn call(&mut self, args: &[&str], timeout: Duration) -> hex_bridge::Result<String> {
+    fn call(&mut self, args: &[&str], timeout: Duration) -> hex_bridge::HexResult<String> {
         assert_eq!(args, ["status", "--json"]);
         assert!(timeout > Duration::ZERO && timeout <= RECORDING_POLL);
         if self.0 == "timeout" {
@@ -19,7 +19,7 @@ impl hex_bridge::HexCommand for Status<'_> {
     }
 }
 
-fn recording_status(reply: &str, budget: Duration) -> hex_bridge::Result<bool> {
+fn recording_status(reply: &str, budget: Duration) -> hex_bridge::HexResult<bool> {
     hex_bridge::HexBridge::new(Status(reply)).recording(budget)
 }
 
@@ -54,31 +54,65 @@ fn recording_pause_fixture() {
         let wav = dir.join("clip.wav");
         asr::write_wav(&wav, &[0.0; 16000]).unwrap();
         job.config.meeting_languages = job.languages;
-        let manifest = pieces::plan(&job.folder, &[("system".into(), 0)].into(), &job.config).unwrap();
-        let plan = batches::spool(&dir, vec![batches::Range {
-            track: "system".into(),
-            piece: manifest.tracks[0].pieces[0].id.clone(),
-            wav,
-            range: AsrRange { context: (0, 16000), members: vec![(0, (0, 16000))], language: Some("en".into()) },
-            model_id: "synthetic".into(),
-            model_sha256: "a".repeat(64),
-        }]).unwrap();
-        batches::run(&dir, &plan, &mut handoff::tests::Fake, &mut handoff::tests::Fake).unwrap();
-        BatchOutput { generation: job.generation.to_string(), source_revision: job.input_revision,
-            plan, manifest, fallbacks: vec![], english_transport: serde_json::Value::Null }
-            .publish(&output).unwrap();
+        let manifest =
+            pieces::plan(&job.folder, &[("system".into(), 0)].into(), &job.config).unwrap();
+        let plan = batches::spool(
+            &dir,
+            vec![batches::Range {
+                track: "system".into(),
+                piece: manifest.tracks[0].pieces[0].id.clone(),
+                wav,
+                range: AsrRange {
+                    context: (0, 16000),
+                    members: vec![(0, (0, 16000))],
+                    language: Some("en".into()),
+                },
+                model_id: "synthetic".into(),
+                model_sha256: "a".repeat(64),
+            }],
+        )
+        .unwrap();
+        batches::run(
+            &dir,
+            &plan,
+            &mut handoff::tests::Fake,
+            &mut handoff::tests::Fake,
+        )
+        .unwrap();
+        BatchOutput {
+            generation: job.generation.to_string(),
+            source_revision: job.input_revision,
+            plan,
+            manifest,
+            fallbacks: vec![],
+            english_transport: serde_json::Value::Null,
+        }
+        .publish(&output)
+        .unwrap();
     }
     if std::env::var_os("SIDENOTE_ROUTING_PAUSE_HOLD").is_some() {
-        assert!(fixture_command().env("SIDENOTE_ROUTING_PAUSE_DESCENDANT", "1")
-            .spawn().unwrap().wait().unwrap().success());
+        assert!(
+            fixture_command()
+                .env("SIDENOTE_ROUTING_PAUSE_DESCENDANT", "1")
+                .spawn()
+                .unwrap()
+                .wait()
+                .unwrap()
+                .success()
+        );
     }
 }
 
 #[test]
 fn recording_pause_preserves_the_owned_attempt_and_retries() {
     use super::super::fallback::Reason;
-    use std::{cell::Cell, os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle}};
-    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject};
+    use std::{
+        cell::Cell,
+        os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle},
+    };
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject,
+    };
     let recording = IDLE.replacen("idle", "recording", 1);
     for (reply, reason) in [
         (recording.as_str(), Some(Reason::PausedForRecording)),
@@ -96,7 +130,10 @@ fn recording_pause_preserves_the_owned_attempt_and_retries() {
         store_io::write(&folder.join("manifest.json"), &serde_json::json!({"status":"complete","created_at_ms":1000,"ended_at_ms":31000,"duration_ms":30000,"system":{"first_arrival_us":0}})).unwrap();
         fs::write(folder.join("transcript.ndjson"), serde_json::json!({"start_ms":0,"end_ms":1000,"source":"system","text":vec!["synthetic";25].join(" ")}).to_string()).unwrap();
         asr::write_wav(&folder.join("system.wav"), &[0.0; 16000]).unwrap();
-        let mut config = core::Config { notes: Some(Default::default()), ..Default::default() };
+        let mut config = core::Config {
+            notes: Some(Default::default()),
+            ..Default::default()
+        };
         config.pipeline.profile = "experimental".into();
         config.labs.after_stop_language_routing = true;
         config.features.indic_engine = true;
@@ -110,19 +147,37 @@ fn recording_pause_preserves_the_owned_attempt_and_retries() {
         let attempt = work.join("attempt.json");
         let revision_dir = destination(root, id).parent().unwrap().to_owned();
         let drain = |watch: &mut RecordingWatch<'_>, worker: &mut dyn FnMut(&Path) -> Command| {
-            run_pending_in(root.to_owned(), &meetings, &[], true, |_, path| Ok(worker(path)), watch).unwrap();
+            run_pending_in(
+                root.to_owned(),
+                &meetings,
+                &[],
+                true,
+                |_, path| Ok(worker(path)),
+                watch,
+            )
+            .unwrap();
         };
         if reason.is_some() {
             let mut probe = |budget| recording_status(reply, budget);
-            let mut watch = RecordingWatch { probe: Some(&mut probe), ..Default::default() };
-            drain(&mut watch, &mut |_| panic!("paused admission started a router"));
-            assert!(!retry_ready(root, &serde_json::from_slice(&pending).unwrap()));
+            let mut watch = RecordingWatch {
+                probe: Some(&mut probe),
+                ..Default::default()
+            };
+            drain(&mut watch, &mut |_| {
+                panic!("paused admission started a router")
+            });
+            assert!(!retry_ready(
+                root,
+                &serde_json::from_slice(&pending).unwrap()
+            ));
             fs::remove_file(&attempt).unwrap();
         }
         let stopping = Cell::new(false);
         let mut descendant = None;
         let mut probe = |budget| {
-            let ready = store_io::read::<Option<u32>>(&work.join("ready.json")).unwrap().filter(|_| descendant.is_none());
+            let ready = store_io::read::<Option<u32>>(&work.join("ready.json"))
+                .unwrap()
+                .filter(|_| descendant.is_none());
             let status = if let Some(pid) = ready {
                 let raw = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
                 assert!(!raw.is_null());
@@ -134,36 +189,55 @@ fn recording_pause_preserves_the_owned_attempt_and_retries() {
                         fs::write(work.join("release"), []).unwrap();
                         IDLE
                     }
-                    "shutdown" => { stopping.set(true); IDLE }
+                    "shutdown" => {
+                        stopping.set(true);
+                        IDLE
+                    }
                     _ => reply,
                 }
-            } else { IDLE };
+            } else {
+                IDLE
+            };
             recording_status(status, budget)
         };
-        let mut watch = RecordingWatch { probe: Some(&mut probe), interval: Duration::ZERO, stopping: &|| stopping.get() };
+        let mut watch = RecordingWatch {
+            probe: Some(&mut probe),
+            interval: Duration::ZERO,
+            stopping: &|| stopping.get(),
+        };
         drain(&mut watch, &mut |request| {
             let mut command = fixture_command();
-            command.env(FIXTURE, request).env("SIDENOTE_ROUTING_PAUSE_HOLD", "1");
+            command
+                .env(FIXTURE, request)
+                .env("SIDENOTE_ROUTING_PAUSE_HOLD", "1");
             command
         });
         assert_eq!(fs::read(&path).unwrap(), pending, "{reply}");
         assert!(!work.join("active.json").exists());
         assert!(!revision_dir.join("revisions").exists());
-        assert_eq!(unsafe { WaitForSingleObject(descendant.unwrap().as_raw_handle(), 1000) }, 0);
+        assert_eq!(
+            unsafe { WaitForSingleObject(descendant.unwrap().as_raw_handle(), 1000) },
+            0
+        );
         if let Some(reason) = reason {
             let mut record: serde_json::Value = store_io::read(&attempt).unwrap();
             assert_eq!(record["pending_retained"], true);
             assert_eq!(record["child"]["timed_out"], false);
             assert!(record["child"]["exit_code"].is_i64());
             let baseline = || Ok(snapshot_in(root, &meetings, id).unwrap().unwrap().baseline);
-            let (_, _, reasons) = notes_input(root, id, None, baseline, 1, 1).unwrap().unwrap();
+            let (_, _, reasons) = notes_input(root, id, None, baseline, 1, 1)
+                .unwrap()
+                .unwrap();
             assert_eq!(reasons[0].reason, reason);
             record["retry_after_ms"] = 0.into();
             store_io::write(&attempt, &record).unwrap();
             let output = work.join("batches/output.json");
             let before = fs::read(&output).unwrap();
             let mut idle = |budget| recording_status(IDLE, budget);
-            let mut watch = RecordingWatch { probe: Some(&mut idle), ..Default::default() };
+            let mut watch = RecordingWatch {
+                probe: Some(&mut idle),
+                ..Default::default()
+            };
             drain(&mut watch, &mut |request| {
                 let mut command = fixture_command();
                 command.env(FIXTURE, request);
@@ -171,7 +245,8 @@ fn recording_pause_preserves_the_owned_attempt_and_retries() {
             });
             assert!(!path.exists());
             assert_eq!(fs::read(output).unwrap(), before);
-            let request: Job = serde_json::from_slice(&fs::read(work.join("request.json")).unwrap()).unwrap();
+            let request: Job =
+                serde_json::from_slice(&fs::read(work.join("request.json")).unwrap()).unwrap();
             let (_, revision) = revision::load(&revision_dir, None).unwrap().unwrap();
             assert_eq!(revision.generation, request.generation.to_string());
             assert_eq!(revision.transcript.input_checksum, request.input_revision);

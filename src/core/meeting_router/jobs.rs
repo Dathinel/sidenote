@@ -59,7 +59,7 @@ const PAUSED_STATUS_UNKNOWN: &str = "paused: recording status unknown";
 const RECORDING_POLL: Duration = Duration::from_secs(2);
 
 struct RecordingWatch<'a> {
-    probe: Option<&'a mut dyn FnMut(Duration) -> hex_bridge::Result<bool>>,
+    probe: Option<&'a mut dyn FnMut(Duration) -> hex_bridge::HexResult<bool>>,
     interval: Duration,
     stopping: &'a dyn Fn() -> bool,
 }
@@ -87,7 +87,14 @@ impl RecordingWatch<'_> {
         let Some(pause) = self.pause(RECORDING_POLL) else {
             return Ok(false);
         };
-        record_pause(work, pending, &Outcome { error: Some(pause.into()), ..Outcome::default() })?;
+        record_pause(
+            work,
+            pending,
+            &Outcome {
+                error: Some(pause.into()),
+                ..Outcome::default()
+            },
+        )?;
         Ok(true)
     }
 }
@@ -820,9 +827,7 @@ pub fn run_pending() -> Result<()> {
         Ok(command)
     })
 }
-pub(crate) fn run_pending_with(
-    worker: impl FnMut(&Job, &Path) -> Result<Command>,
-) -> Result<()> {
+pub(crate) fn run_pending_with(worker: impl FnMut(&Job, &Path) -> Result<Command>) -> Result<()> {
     let _update_activity = crate::updates::activity()?;
     let root = super::super::state_dir();
     let args: Vec<_> = std::env::args().collect();
@@ -841,9 +846,8 @@ pub(crate) fn run_pending_with(
     let mut watch = RecordingWatch::default();
     #[cfg(windows)]
     let mut probe = |remaining| {
-        let speech = path_arg("--hex-cli").map_or_else(HexSpeech::default, |executable| HexSpeech {
-            executable,
-        });
+        let speech = path_arg("--hex-cli")
+            .map_or_else(HexSpeech::default, |executable| HexSpeech { executable });
         hex_bridge::HexBridge::new(speech).recording(remaining)
     };
     #[cfg(windows)]
@@ -1043,7 +1047,10 @@ fn run_pending_in(
                 cleanup_work(&work);
                 return Ok(());
             }
-            if matches!(outcome.error.as_deref(), Some(PAUSED_RECORDING | PAUSED_STATUS_UNKNOWN)) {
+            if matches!(
+                outcome.error.as_deref(),
+                Some(PAUSED_RECORDING | PAUSED_STATUS_UNKNOWN)
+            ) {
                 record_pause(&work, &pending, &outcome)?;
                 cleanup_work(&work);
                 continue;
