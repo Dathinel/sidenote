@@ -45,6 +45,7 @@ impl State {
         match prefs.save(&self.store.root) {
             Ok(()) => {
                 self.meeting_ui.tabs = tabs;
+                *self.meeting_ui.sections.get_mut() = sections::Visit::default();
                 self.meeting_ui.status_open = false;
                 self.more_menu = None;
             }
@@ -397,7 +398,15 @@ pub(super) fn status_chip(
 }
 
 /// `side` is the page gutter; the wide page puts the header in the notes column and passes 0.
-fn header(s: &State, k: &Kit, m: &Meeting, side: f32, p: Palette, layer: &mut Vec<El>) -> El {
+fn header(
+    s: &State,
+    k: &Kit,
+    m: &Meeting,
+    side: f32,
+    p: Palette,
+    layer: &mut Vec<El>,
+    sections: Option<El>,
+) -> El {
     let people = m.summary.people.len();
     let phone = super::phone(s);
     // Keep the phone controls together regardless of how wide the facts are.
@@ -430,13 +439,13 @@ fn header(s: &State, k: &Kit, m: &Meeting, side: f32, p: Palette, layer: &mut Ve
     }
     rest.extend(project::reading_chip(s, k, &m.id, p, layer));
     rest.extend(status_chip(s, k, m, p, layer));
+    rest.extend(sections);
     let menu = more::menu(s, k, m, "meeting", p, layer);
     let meta = if phone {
         let mut meta = col().key("meeting-meta").w_full().gap(6.0);
         first = first.child(el().grow(1.0).h(28.0)).child(menu);
         meta = meta.child(first);
         if !rest.is_empty() {
-            // The empty slot after the project is where the section rail's chip goes.
             meta = meta.child(
                 row()
                     .key("meeting-controls-more")
@@ -444,8 +453,7 @@ fn header(s: &State, k: &Kit, m: &Meeting, side: f32, p: Palette, layer: &mut Ve
                     .flex_wrap()
                     .gaps(6.0, 6.0)
                     .items_center()
-                    .children(rest)
-                    .child(el().key("meeting-sections-slot")),
+                    .children(rest),
             );
         }
         meta
@@ -579,18 +587,14 @@ fn decisions_first(points: &[Point]) -> Vec<(usize, &Point)> {
     blocks.into_iter().flatten().collect()
 }
 
-/// One section heading. Every heading on the page uses this role; the first sits right under the
-/// header, which already ends 28 px above the notes, and each later one gets 28 px of its own.
-fn heading(label: &str, key: String, first: bool, p: Palette) -> El {
-    roles::SECTION
-        .wrap(label, p.ink)
-        .key(key)
-        .selectable(true)
-        .mt(if first { 0.0 } else { roles::SECTION_TOP })
-        .mb(8.0)
-}
-
-fn narrative(s: &State, m: &Meeting, p: Palette) -> El {
+fn narrative(
+    s: &State,
+    m: &Meeting,
+    p: Palette,
+    draft: Option<&core::Summary>,
+    visit: &sections::Visit,
+    sections: &mut Vec<sections::Section>,
+) -> El {
     let mut body = col().key("summary-top").w_full().gap(0.0);
     if s.meeting_tab == Tab::Notes {
         return body.child(if m.notes.is_empty() {
@@ -600,8 +604,7 @@ fn narrative(s: &State, m: &Meeting, p: Palette) -> El {
         });
     }
     body = body.children(crate::ui::live::recording_note(s, p));
-    let draft = draft_summary(m);
-    let summary = draft.as_ref().unwrap_or(&m.summary);
+    let summary = draft.unwrap_or(&m.summary);
     if draft.is_some() {
         body = body.child(
             roles::META
@@ -614,6 +617,7 @@ fn narrative(s: &State, m: &Meeting, p: Palette) -> El {
         return body.children(notes_status::meeting_banner(s, m, p));
     }
     let mut first = true;
+    let mut heading = |label: &str, key, first, p| visit.heading(sections, label, key, first, p);
     if !summary.context.is_empty() {
         body = body
             .child(heading("Context", "sec-context".into(), first, p))
@@ -650,14 +654,10 @@ fn narrative(s: &State, m: &Meeting, p: Palette) -> El {
             );
         }
     }
-    body.children(
-        draft
-            .as_ref()
-            .map(|_| crate::ui::notes_status::progress("Writing notes", p)),
-    )
-    // The rows have no gap of their own (column gap 0), so a bordered banner needs its own room.
-    .children(notes_status::meeting_banner(s, m, p).map(|banner| banner.mt(16.0)))
-    .children(crate::ui::notes_status::provenance(m, p))
+    body.children(draft.map(|_| crate::ui::notes_status::progress("Writing notes", p)))
+        // The rows have no gap of their own (column gap 0), so a bordered banner needs its own room.
+        .children(notes_status::meeting_banner(s, m, p).map(|banner| banner.mt(16.0)))
+        .children(crate::ui::notes_status::provenance(m, p))
 }
 
 /// The label over a rail group: the name at 600 in soft, the count at 400 in faint, the help hint.
@@ -942,7 +942,17 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
     } else {
         s.overlay_h.get().max(fade) + 32.0
     };
-    let mut doc = narrative(s, m, p);
+    let draft = (s.meeting_tab == Tab::Summary)
+        .then(|| draft_summary(m))
+        .flatten();
+    let mut visit = s.meeting_ui.sections.borrow_mut();
+    visit.sync(m, s.meeting_tab, strip);
+    let mut sections = Vec::new();
+    let mut doc = narrative(s, m, p, draft.as_ref(), &visit, &mut sections);
+    visit.retain(&sections);
+    let marks = (strip && sections.len() >= 3).then(|| visit.marks(&sections, p));
+    let chip = (!strip && sections.len() >= 3).then(|| visit.chip(&sections, k, p, layer));
+    drop(visit);
     if !wide {
         let inset = if s.app_w.get() < super::PHONE {
             0.0
@@ -1081,17 +1091,17 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
         .mr(-8.0);
         columns = columns
             .justify_center()
-            .child(grid("meeting-grid", main, GRID).child(tasks));
+            .child(grid("meeting-grid", main, GRID, marks).child(tasks));
     } else if strip {
         // Narrower than the grid but wide enough for the strip: the notes keep their column and
         // the tasks sit under them.
         columns = columns
             .justify_center()
-            .child(grid("meeting-grid", main, STRIP + COLUMN));
+            .child(grid("meeting-grid", main, STRIP + COLUMN, marks));
     } else {
         columns = columns.child(main);
     }
-    let mut head = header(s, k, m, side, p, layer);
+    let mut head = header(s, k, m, side, p, layer, chip);
     if strip {
         head = row()
             .w_full()
@@ -1101,6 +1111,7 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
                 "meeting-header-grid",
                 head.w(COLUMN).min_w(COLUMN).max_w(COLUMN),
                 if wide { GRID } else { STRIP + COLUMN },
+                None,
             ));
     }
     let mut pane = col()
@@ -1118,14 +1129,16 @@ pub fn pane(s: &State, k: &Kit, p: Palette, narrow: bool, layer: &mut Vec<El>) -
 
 /// The grid row, `width` wide: the 44 point strip kept for the section rail, then `notes`. The
 /// header and the page body both sit in one, so the title lines up with the notes.
-fn grid(key: &str, notes: El, width: f32) -> El {
+fn grid(key: &str, notes: El, width: f32, marks: Option<El>) -> El {
     row()
         .key(key)
         .w(width)
         .min_w(width)
         .max_w(width)
         .child(
-            el().key(format!("{key}-strip"))
+            marks
+                .unwrap_or_else(el)
+                .key(format!("{key}-strip"))
                 .w(STRIP)
                 .min_w(STRIP)
                 .max_w(STRIP),
@@ -1258,6 +1271,163 @@ mod tests {
             assert!(!rt.state.transcript_open);
             assert!(element(&rt, "meeting-transcript").focused);
         }
+    }
+
+    fn section_fixture() -> serde_json::Value {
+        serde_json::json!({
+            "title": "Library open house",
+            "made_by": {"language_passes": "routed"},
+            "context": ["Plan the library open house and check what each group will bring. ".repeat(125)],
+            "topics": [
+                {"title": "Workshop"},
+                {"title": "Workshop", "points": vec![serde_json::json!({"text":"Bring a map."}); 35]},
+            ],
+        })
+    }
+
+    fn section_key(rt: &mut Runtime<State>, key: Key) {
+        rt.key(KeyEvent {
+            key,
+            mods: rune::Mods::default(),
+        });
+        rt.settle_all();
+        rt.frame(0.0);
+    }
+
+    fn section_focus(rt: &mut Runtime<State>, key: &str) {
+        rt.update(|_, tx| tx.focus(key, true));
+        rt.frame(0.0);
+        assert!(element(rt, key).focused);
+    }
+
+    fn section_absent(rt: &Runtime<State>, key: &str) {
+        assert!(rt.find(key).is_none(), "{key}");
+    }
+
+    fn section_landed(rt: &Runtime<State>, key: &str) {
+        let y = element(rt, key).rect[1];
+        let top = element(rt, "meeting-scroll").rect[1];
+        assert!((y - top - 12.0).abs() < 2.0, "{key}");
+    }
+
+    #[test]
+    fn section_controls_follow_rendered_headings_and_restore_focus() {
+        const THREE: &str = "1800000000144-999";
+        const TWO: &str = "1800000000145-999";
+        crate::test_paths::isolate();
+        for id in [THREE, TWO] {
+            let folder = core::meetings_dir().join(id);
+            std::fs::create_dir_all(&folder).unwrap();
+            let mut summary = section_fixture();
+            if id == TWO {
+                summary["topics"].as_array_mut().unwrap().pop();
+            }
+            std::fs::write(folder.join("english-summary.json"), summary.to_string()).unwrap();
+            std::fs::write(folder.join("notes.md"), "Bring paper maps.").unwrap();
+        }
+        for width in [390.0, 1334.0] {
+            let mut rt = reading_page(THREE, width, None);
+            let desktop = width == 1334.0;
+            let variant = if desktop { "mark" } else { "item" };
+            let context = format!("section-{variant}-sec-context");
+            let first = format!("section-{variant}-topic-1");
+            let last = format!("section-{variant}-topic-2");
+            if desktop {
+                section_absent(&rt, "meeting-sections");
+                section_focus(&mut rt, &context);
+            } else {
+                section_absent(&rt, "meeting-status");
+                section_absent(&rt, "meeting-people");
+                section_absent(&rt, &format!("meeting-project-{THREE}"));
+                section_focus(&mut rt, "meeting-sections");
+                section_key(&mut rt, Key::Enter);
+                assert!(element(&rt, &context).focused);
+                section_key(&mut rt, Key::Escape);
+                section_absent(&rt, &context);
+                assert!(element(&rt, "meeting-sections").focused);
+                section_key(&mut rt, Key::Enter);
+            }
+            for key in [&first, &last] {
+                assert_eq!(element(&rt, key).label.as_deref(), Some("Workshop"));
+            }
+            section_key(&mut rt, Key::Down);
+            let (choice, heading) = if desktop {
+                section_key(&mut rt, Key::Down);
+                (last, "topic-2")
+            } else {
+                (first, "topic-1")
+            };
+            assert!(element(&rt, &choice).focused);
+            section_key(&mut rt, Key::Enter);
+            section_landed(&rt, heading);
+            if desktop {
+                assert!(element(&rt, &choice).focused);
+            } else {
+                section_absent(&rt, &choice);
+                assert!(element(&rt, "meeting-sections").focused);
+            }
+
+            section_focus(&mut rt, "segment0");
+            section_key(&mut rt, Key::Right);
+            element(&rt, "sec-your-notes");
+            section_absent(&rt, &context);
+            section_absent(&rt, "meeting-sections");
+            rt.update(|s, _| s.set_meeting_tab(Tab::Summary));
+            rt.frame(0.0);
+            if !desktop {
+                section_focus(&mut rt, "meeting-sections");
+                section_key(&mut rt, Key::Enter);
+                assert!(element(&rt, &context).focused);
+            }
+            rt.update(|s, tx| s.select(TWO, tx));
+            rt.frame(0.0);
+            element(&rt, "topic-1");
+            section_absent(&rt, &context);
+            section_absent(&rt, "meeting-sections");
+        }
+    }
+
+    #[test]
+    fn finished_summary_replaces_the_open_draft_index() {
+        const ID: &str = "1800000000146-999";
+        crate::test_paths::isolate();
+        let folder = core::meetings_dir().join(ID);
+        let drafts = core::state_dir().join("local/draft-summaries");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::create_dir_all(&drafts).unwrap();
+        std::fs::write(folder.join("manifest.json"), r#"{"status":"complete"}"#).unwrap();
+        std::fs::write(
+            drafts.join(format!("{ID}.json")),
+            section_fixture().to_string(),
+        )
+        .unwrap();
+        let key = "section-item-topic-1";
+        let mut rt = reading_page(ID, 390.0, None);
+        section_focus(&mut rt, "meeting-sections");
+        section_key(&mut rt, Key::Enter);
+        assert_eq!(element(&rt, key).label.as_deref(), Some("Workshop"));
+
+        let mut published = section_fixture();
+        published["topics"][0]["title"] = "Reading schedule".into();
+        std::fs::write(folder.join("english-summary.json"), published.to_string()).unwrap();
+        rt.update(|s, _| {
+            let options = s.refresh_options();
+            let data = Box::new(crate::ui::refresh::Data::read(options));
+            s.apply_event(crate::ui::Event::Refreshed(crate::ui::refresh::Result {
+                generation: core::mutation_generation(),
+                options,
+                data: Some(data),
+            }));
+        });
+        rt.frame(0.0);
+        section_absent(&rt, "draft-summary-notice");
+        section_absent(&rt, key);
+        section_focus(&mut rt, "meeting-sections");
+        section_key(&mut rt, Key::Enter);
+        assert_eq!(element(&rt, key).label.as_deref(), Some("Reading schedule"));
+        section_key(&mut rt, Key::Down);
+        section_key(&mut rt, Key::Enter);
+        section_landed(&rt, "topic-1");
     }
 
     #[test]

@@ -17,6 +17,7 @@ use sidenote::core::{self, Meeting, Point};
 use std::ops::Range;
 pub(super) mod paragraphs;
 pub(super) mod reading;
+mod sections;
 
 pub struct ReadingUi {
     pub custom: bool,
@@ -26,6 +27,7 @@ pub struct ReadingUi {
     pub recording_hover: bool,
     pub status_open: bool,
     pub(super) rail: reading::RailVisit,
+    sections: std::cell::RefCell<sections::Visit>,
     pub window_h: std::cell::Cell<f32>,
 }
 impl ReadingUi {
@@ -44,6 +46,7 @@ impl ReadingUi {
             recording_hover: false,
             status_open: false,
             rail: reading::RailVisit::default(),
+            sections: Default::default(),
             window_h: std::cell::Cell::new(800.0),
         }
     }
