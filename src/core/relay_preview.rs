@@ -26,6 +26,18 @@ mod test_driver;
 mod versions;
 pub use versions::{Choice, Conflict, Resolution, current as conflicts};
 
+const STABLE_UNAVAILABLE: &str = "Relay sync is unavailable in Sidenote Stable.";
+
+fn require_nightly() -> io::Result<()> {
+    if matches!(super::CHANNEL, super::Channel::Stable) {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            STABLE_UNAVAILABLE,
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Clone)]
 pub struct SharedProfile {
     pub your_name: String,
@@ -166,6 +178,9 @@ pub struct Settings {
 
 impl Settings {
     pub fn load(root: &Path) -> io::Result<Self> {
+        if matches!(super::CHANNEL, super::Channel::Stable) {
+            return Ok(Self::default());
+        }
         let read = store_io::read(&root.join("local/relay/settings.json")).map_err(failed);
         #[cfg(target_os = "linux")]
         if cfg!(target_os = "linux") {
@@ -180,6 +195,7 @@ impl Settings {
         }
     }
     pub fn save(&self, root: &Path) -> io::Result<()> {
+        require_nightly()?;
         #[cfg(target_os = "linux")]
         if self.enabled {
             return Err(io::Error::new(
@@ -786,6 +802,7 @@ fn project(doc: &Automerge) -> anyhow::Result<Vec<ManualTask>> {
 #[cfg(any(debug_assertions, feature = "relay-qualification"))]
 pub fn headless(args: &[std::ffi::OsString]) -> io::Result<()> {
     use std::io::{BufRead, Write};
+    require_nightly()?;
     let mut roots = Vec::new();
     for flag in ["--data-dir", "--meetings-dir", "--peers-dir"] {
         let path = args

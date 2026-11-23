@@ -158,6 +158,7 @@ fn finish(root: &Path, address: &str, generation: u64) {
     };
 }
 pub fn check_now(root: &Path) -> io::Result<Operational> {
+    require_nightly()?;
     #[cfg(target_os = "linux")]
     if cfg!(target_os = "linux") {
         return Ok(Operational {
@@ -200,6 +201,13 @@ impl Preview {
     }
 }
 pub fn status(root: &Path) -> io::Result<Operational> {
+    if matches!(super::super::CHANNEL, super::super::Channel::Stable) {
+        return Ok(Operational {
+            read_only: true,
+            message: STABLE_UNAVAILABLE.into(),
+            last_contact: None,
+        });
+    }
     #[cfg(target_os = "linux")]
     if cfg!(target_os = "linux") {
         return Ok(Operational {

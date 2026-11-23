@@ -107,7 +107,7 @@
 
   "src/core/live_edit.rs": "c54f9c6c5cec7987e2e17116c5487179326457bc637bc422d4417c3e7c05ea36",
 
-  "src/core/mcp_connect.rs": "751a61735a486de995d83c35a379df25f52117f2c1f0511b493242fc5bfae9ef",
+  "src/core/mcp_connect.rs": "2988ef0b0f9dcf354d6f8997d90845f2cf97f965b4cea667cc574f8d4dc9ca03",
 
   "src/core/mcp_connect/isolated_tests.rs": "5cfa80ba44ac60c9df438f5318291637c27b669845fcaecb0852ccda7ec45745",
 
@@ -269,13 +269,13 @@
 
   "src/core/recording_source/tests.rs": "f599f85ce6e360ba9ee314037e8f7036c9de16939d02cee773662730c9b84f84",
 
-  "src/core/relay_preview.rs": "6bd8a988f834b9b6079cc9a88ecdbe27daf08d82389c1361080220e309096458",
+  "src/core/relay_preview.rs": "c07b5eb76ff0bb2d6372b53904e50755580576e18f906aa5909c819908a9d989",
 
   "src/core/relay_preview/migration.rs": "e9e0e4c86be43027861825ba387c26ca70a9f8567964de61c9113e2e79a8559f",
 
-  "src/core/relay_preview/operations.rs": "9dcd718a190ba735d59805a466b49bce3554661cfe66b6495900db9b10ea29ba",
+  "src/core/relay_preview/operations.rs": "7810dddb219c1c1fc9d0763b666a4fc337a788404adeb74d372c6e6095fe97fd",
 
-  "src/core/relay_preview/pairing.rs": "3a234b69c8441c987a06ce7ff727076f4443f8b25d4006d087480989d36753fb",
+  "src/core/relay_preview/pairing.rs": "7f1907b23037fd89444663908d43ac93c946ccdaf28214e537802e314e3c17c9",
 
   "src/core/relay_preview/shared.rs": "373e85ff8212a7cc4477c311aefb04c597837df07b6c9ec996270bda73d80bd8",
 
@@ -307,7 +307,7 @@
 
   "src/core/store_io.rs": "d46f5e4a16ec08cb3279e1ba72d59c66703875ca229ebd2969dbadb9b168aa37",
 
-  "src/core/sync_state.rs": "5ed66965cebe7578baf77900557839707064f555a026b9de218895634083f664",
+  "src/core/sync_state.rs": "132a2c3609f1fe95db0f4298bcee4f54b1d51e064db1c848f90adf2fb922c16f",
 
   "src/core/tasks.rs": "0071ad0533947f13a2e69faedad2286213197648c5db7fc4540725f7c7b78dec",
 
@@ -337,7 +337,7 @@
 
   "src/mcp/access.rs": "63a5df969d655db4d06a7d8e0bb21494a263614d597a6cf8138f238da4542df2",
 
-  "src/mcp/network.rs": "fae9133da2582d00c66ab63ce0ad5bf6397234eb41c8184809888314ae902369",
+  "src/mcp/network.rs": "52582f512b6621939d0c63dc451a1ec41eeba4561c9e7ba5239450c8d7f04a29",
 
   "src/meeting_icon.rs": "b9f78ad6272c44851d62f2062a4ac71c5332fb1ea854e0938f719ad254f7fcd5",
 
@@ -361,7 +361,7 @@
 
   "src/response_time.rs": "508cc3d4ae57ac8277982199a998f222b8c1ffc2bccd11b55920ce3152c43540",
 
-  "src/service.rs": "9a240c94b2055fa16928cc3311189a5a411371bca9311eb6a7b36728fc646b17",
+  "src/service.rs": "2eb3f34868751414697aedf3756fe49f95a2d69626ca0b46e2f89a385837d19a",
 
   "src/service/schedule.rs": "e2049ae50e264bf47e77ae366ef91a21e78203fa25362fbd5a53b332dc9cb5c3",
 
@@ -379,7 +379,7 @@
 
   "src/service/workers.rs": "d3e3abd1f69114ce2798268fdcbf9507b83b27a9137a40421367125b042dbc89",
 
-  "src/sync_owner.rs": "bbc696ecd1b626713030f8001a3c16a30fa766920dea3339371b5c28e8bab554",
+  "src/sync_owner.rs": "bb90b9271a90a27082a2d307e2aa6ab9c611005f7067a19a2684c02bb74d74e3",
 
   "src/sync_owner/commands.rs": "579936c9e86261f16a13e22a3337e7d00d2cd16b58cf1ac67e5cbd4b27e7b283",
 

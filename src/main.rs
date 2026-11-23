@@ -13,12 +13,49 @@ fn default_test_paths_are_isolated_from_owner_appdata() {
 }
 #[cfg(feature = "desktop")]
 mod ui;
+fn unavailable_in_stable(args: &[std::ffi::OsString]) -> Option<&std::ffi::OsStr> {
+    args.iter()
+        .map(|arg| arg.as_os_str())
+        .find(|arg| {
+            matches!(
+                arg.to_str(),
+                Some(
+                    "--server"
+                        | "--speech-worker"
+                        | "--speech-port"
+                        | "--sync-control"
+                        | "--mcp"
+                        | "--mcp-access"
+                        | "--mcp-port"
+                        | "--ops"
+                        | "--cpu-models"
+                        | "--relay-preview-headless"
+                )
+            ) || (!cfg!(windows) && *arg == "--listen")
+        })
+        .or_else(|| {
+            args.windows(2)
+                .find(|pair| {
+                    pair[0] == "--device-role" && (pair[1] == "server" || pair[1] == "hub")
+                })
+                .map(|_| std::ffi::OsStr::new("Server or hub mode"))
+        })
+}
 fn main() {
-    #[cfg(target_os = "linux")]
-    sidenote::platform::supervisor_entry();
     #[cfg(feature = "desktop")]
     let process_started = std::time::Instant::now();
     let args: Vec<_> = std::env::args_os().skip(1).collect();
+    if matches!(sidenote::core::CHANNEL, sidenote::core::Channel::Stable)
+        && let Some(arg) = unavailable_in_stable(&args)
+    {
+        eprintln!(
+            "{} is unavailable in Sidenote Stable.",
+            arg.to_string_lossy()
+        );
+        std::process::exit(2);
+    }
+    #[cfg(target_os = "linux")]
+    sidenote::platform::supervisor_entry();
     #[cfg(all(windows, feature = "idle-cpu-proof"))]
     if args.iter().any(|a| a == "--idle-cpu-seed-notes") {
         let result = sidenote::core::configure_paths(&args)

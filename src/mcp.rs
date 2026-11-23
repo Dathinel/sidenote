@@ -355,6 +355,10 @@ impl ServerHandler for Meetings {
 
 /// Early CLI path. No Rune, Hex API, window guard, listener, or GPU initialization.
 pub fn run() -> i32 {
+    if matches!(crate::core::CHANNEL, crate::core::Channel::Stable) {
+        eprintln!("External MCP is unavailable in Sidenote Stable.");
+        return 2;
+    }
     let result = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()

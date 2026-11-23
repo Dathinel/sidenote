@@ -156,6 +156,7 @@ pub fn start(
     root: &Path,
     join: Option<SecretCode>,
 ) -> io::Result<(Pairing, mpsc::Receiver<Update>)> {
+    require_nightly()?;
     let preview = get(root)?.ok_or_else(|| store_io::invalid("Turn on relay preview first"))?;
     preview
         .device

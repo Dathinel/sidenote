@@ -150,6 +150,7 @@ pub struct Owner {
 }
 impl Owner {
     pub fn start(root: &Path, lock: std::fs::File) -> io::Result<Self> {
+        require_nightly()?;
         let controller = Arc::new(Mutex::new(Controller::new(root)?));
         let stop = Arc::new(AtomicBool::new(false));
         #[cfg(target_os = "linux")]
@@ -225,8 +226,22 @@ impl Drop for Owner {
     }
 }
 
+fn require_nightly() -> io::Result<()> {
+    if matches!(core::CHANNEL, core::Channel::Stable) {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "Remote sync is unavailable in Sidenote Stable.",
+        ));
+    }
+    Ok(())
+}
+
 /// Local control uses stdin, never command-line invitation or task arguments.
 pub fn cli() -> i32 {
+    if let Err(error) = require_nightly() {
+        eprintln!("{error}");
+        return 2;
+    }
     #[cfg(target_os = "linux")]
     let result = stream_commands(|bytes| local::request(&core::state_dir(), bytes));
     #[cfg(not(target_os = "linux"))]
@@ -245,6 +260,7 @@ pub(crate) fn mcp_metrics() -> (u64, u64) {
 /// A one-shot helper never opens the service's relay replica.
 #[cfg(target_os = "linux")]
 pub(crate) fn local_request(value: &serde_json::Value) -> io::Result<serde_json::Value> {
+    require_nightly()?;
     let bytes = serde_json::to_vec(value)?;
     let reply = local::request(&core::state_dir(), &bytes)?;
     let envelope: serde_json::Value = serde_json::from_slice(&reply)?;
