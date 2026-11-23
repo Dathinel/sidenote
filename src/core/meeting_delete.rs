@@ -404,6 +404,8 @@ pub enum Phase {
     Deleted,
     Restoring,
     Restored,
+    Purging,
+    Purged,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -423,6 +425,9 @@ pub enum MoveEvent {
     Finished(Phase),
     Unhide(WriteStage),
     Unhidden,
+    BeforeRemove(usize),
+    Removed(usize),
+    SyncPurge,
 }
 
 #[derive(Debug)]
@@ -840,5 +845,71 @@ impl Storage {
         }
         ids.sort_unstable();
         Ok(ids)
+    }
+    pub fn purge(&self, id: &str, now_ms: i64) -> io::Result<bool> {
+        self.purge_checked(id, now_ms, |_| Ok(()))
+    }
+
+    pub fn purge_checked(
+        &self,
+        id: &str,
+        now_ms: i64,
+        mut checkpoint: impl FnMut(MoveEvent) -> io::Result<()>,
+    ) -> io::Result<bool> {
+        const RETENTION_MS: i64 = 30 * 24 * 60 * 60 * 1000;
+        let _lock = self.lock()?;
+        let mut receipt = self.receipt(id)?;
+        if !matches!(receipt.phase, Phase::Deleted | Phase::Purging)
+            || chrono::DateTime::from_timestamp_millis(now_ms).is_none()
+            || !now_ms
+                .checked_sub(receipt.deleted_ms)
+                .is_some_and(|ms| ms >= RETENTION_MS)
+        {
+            return Ok(false);
+        }
+        let dir = self.transaction(id)?;
+        let volume = self.volume()?;
+        let mut existing = Vec::new();
+        for (index, member) in receipt.members.iter().enumerate() {
+            if !receipt.moved[index] {
+                continue;
+            }
+            let path = Self::recycled(&dir, index);
+            match inspect(&path, volume)? {
+                Some(key) if key == member.identity => existing.push((index, path)),
+                None if receipt.phase == Phase::Purging => {}
+                _ => return Err(invalid()),
+            }
+        }
+        self.suppress(&receipt, &mut checkpoint)?;
+        receipt.phase = Phase::Purging;
+        self.journal(&receipt, &mut checkpoint)?;
+        checkpoint(MoveEvent::Receipt)?;
+        for (index, path) in existing {
+            checkpoint(MoveEvent::BeforeRemove(index))?;
+            if metadata(&path)?.is_some_and(|m| m.is_dir()) {
+                fs::remove_dir_all(path)?;
+            } else {
+                fs::remove_file(path)?;
+            }
+            checkpoint(MoveEvent::Removed(index))?;
+        }
+        checkpoint(MoveEvent::SyncPurge)?;
+        sync_directory(&dir)?;
+        receipt.phase = Phase::Purged;
+        self.journal(&receipt, &mut checkpoint)?;
+        checkpoint(MoveEvent::Finished(receipt.phase))?;
+        Ok(true)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn different_volumes_refuse_before_a_move() {
+        assert_eq!(
+            super::same_volume(1, 2).unwrap_err().kind(),
+            std::io::ErrorKind::CrossesDevices
+        );
     }
 }

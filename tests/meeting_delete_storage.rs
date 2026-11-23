@@ -652,3 +652,152 @@ fn every_restore_boundary_can_be_retried_after_reopen() {
         );
     }
 }
+
+#[test]
+fn hex_only_meeting_changes_visibility_without_moving_files() {
+    const DUE: i64 = 100 + 30 * 24 * 60 * 60 * 1000;
+    for undo in [false, true] {
+        let f = Fixture::new();
+        f.write("meetings/10/manifest.json", b"{}");
+        f.write("meetings/10/notes.md", b"notes");
+        let folder = f.meetings.join("10");
+        let before = bytes_at(&folder);
+        let store = f.storage();
+        let id = delete(&store);
+        assert_eq!(bytes_at(&folder), before);
+        assert!(suppressed_ids(&f.state).unwrap().contains("10"));
+        if undo {
+            store.restore(&id).unwrap();
+        } else {
+            assert!(store.purge(&id, DUE).unwrap());
+        }
+        assert_eq!(suppressed_ids(&f.state).unwrap().contains("10"), !undo);
+        assert_eq!(bytes_at(&folder), before);
+    }
+}
+
+#[test]
+fn purge_requires_thirty_days_and_keeps_suppression() {
+    const DAY: i64 = 24 * 60 * 60 * 1000;
+    let f = recorded_fixture(true);
+    let s = f.storage();
+    let inputs = f.storage().inventory("10").unwrap().hex_inputs;
+    let raw: Vec<_> = inputs
+        .iter()
+        .filter(|input| !input.directory)
+        .map(|input| {
+            let path = f.meetings.join(&input.relative);
+            let bytes = fs::read(&path).unwrap();
+            (path, bytes)
+        })
+        .collect();
+    let id = delete(&s);
+    let dir = f.state.join("local/deleted-meetings").join(&id);
+    for now in [99, 100 + 29 * DAY, 100 + 30 * DAY - 1, i64::MAX] {
+        assert!(!s.purge(&id, now).unwrap());
+        assert_eq!(s.receipt(&id).unwrap().phase, Phase::Deleted);
+        assert!(dir.join("0").exists());
+    }
+    assert!(s.purge(&id, 100 + 30 * DAY).unwrap());
+    assert!(!s.purge(&id, 100 + 31 * DAY).unwrap());
+    assert_eq!(s.receipt(&id).unwrap().phase, Phase::Purged);
+    assert_eq!(bytes_at(&dir).len(), 1);
+    for (path, bytes) in raw {
+        assert_eq!(fs::read(path).unwrap(), bytes);
+    }
+    assert_eq!(
+        suppressed_ids(&f.state)
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>(),
+        ["10", "11"]
+    );
+}
+
+#[test]
+fn corrupt_receipts_cannot_authorize_restore_or_purge() {
+    let f = recorded_fixture(false);
+    let s = f.storage();
+    let id = delete(&s);
+    let dir = f.state.join("local/deleted-meetings").join(&id);
+    let receipt = dir.join("receipt.json");
+    let mut edited: serde_json::Value =
+        serde_json::from_slice(&fs::read(&receipt).unwrap()).unwrap();
+    edited[1]["deleted_ms"] = (-1_000_000_000_000_i64).into();
+    fs::write(&receipt, serde_json::to_vec(&edited).unwrap()).unwrap();
+    let before = bytes_at(&dir);
+    assert!(s.restore(&id).is_err());
+    assert!(s.purge(&id, 100).is_err());
+    assert_eq!(bytes_at(&dir), before);
+    assert_eq!(
+        fs::read(f.meetings.join("10/manifest.json")).unwrap(),
+        b"{}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn symlink_in_owned_tree_refuses_recycle() {
+    let f = recorded_fixture(false);
+    let outside = f.temp.path().join("outside");
+    fs::create_dir(&outside).unwrap();
+    std::os::unix::fs::symlink(&outside, f.meetings.join("10/link")).unwrap();
+    assert!(f.storage().inventory("10").is_err());
+    assert!(f.meetings.join("10/link").is_symlink());
+}
+
+#[test]
+fn every_purge_boundary_can_be_retried_after_reopen() {
+    const DUE: i64 = 100 + 30 * 24 * 60 * 60 * 1000;
+    let (f, id, _) = recycle_pair();
+    let mut events = Vec::new();
+    assert!(
+        f.storage()
+            .purge_checked(&id, DUE, |event| {
+                events.push(event);
+                Ok(())
+            })
+            .unwrap()
+    );
+    for (stop, expected_event, replaced) in events
+        .into_iter()
+        .enumerate()
+        .flat_map(|(stop, event)| [false, true].map(|replace| (stop, event, replace)))
+    {
+        let (f, id, other) = recycle_pair();
+        let unrelated = bytes_at(&other);
+        let hex_before = bytes_at(&f.meetings.join("10"));
+        let dir = f.state.join("local/deleted-meetings").join(&id);
+        let mut cursor = 0;
+        let err = f.storage().purge_checked(&id, DUE, |event| {
+            if cursor == stop {
+                assert_eq!(event, expected_event);
+                rename_hex(&f, replaced);
+                if event == MoveEvent::BeforeRemove(0) {
+                    fs::remove_file(dir.join("0/manifest.json")).unwrap();
+                    assert!(dir.join("0/unknown").exists());
+                }
+                return Err(std::io::Error::other("purge interrupted"));
+            }
+            cursor += 1;
+            Ok(())
+        });
+        assert!(err.is_err());
+        let restarted = f.storage();
+        assert_eq!(
+            restarted.purge(&id, DUE).unwrap(),
+            expected_event != MoveEvent::Finished(Phase::Purged)
+        );
+        assert_eq!(restarted.receipt(&id).unwrap().phase, Phase::Purged);
+        assert_eq!(bytes_at(&dir).len(), 1);
+        assert_hex_unchanged(&f, &hex_before, replaced);
+        assert_eq!(bytes_at(&other), unrelated);
+        assert_eq!(
+            suppressed_ids(&f.state)
+                .unwrap()
+                .into_iter()
+                .collect::<Vec<_>>(),
+            ["10", "11", "20"]
+        );
+    }
+}
