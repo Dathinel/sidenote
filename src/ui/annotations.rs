@@ -193,6 +193,9 @@ fn thumbnail(s: &State, folder: &std::path::Path, key: String, p: Palette) -> El
 }
 impl State {
     fn refresh_annotation_thumbnails(&mut self) {
+        if !self.config.features.annotations {
+            return;
+        }
         let captures = self.annotations.captures.clone();
         let root = self.store.root.clone();
         let sender = self.events_tx.clone();
@@ -244,7 +247,8 @@ impl State {
         }
     }
     pub fn refresh_annotations(&mut self) {
-        if self.annotations.loading
+        if !self.config.features.annotations
+            || self.annotations.loading
             || self.annotations.busy
             || self.annotations.review.is_some()
             || rune::tooling::headless_run().is_some()

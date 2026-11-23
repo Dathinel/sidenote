@@ -2458,6 +2458,9 @@ fn deletion_cancels_delayed_ask_text_and_answers_in_all_scopes() {
 
     let mut rt = page_with(DEFAULT_SIZE, || {
         let root = core::state_dir();
+        let config = serde_json::json!({"version":1,"features":{"people":true,"memory":true}});
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("config.json"), config.to_string()).unwrap();
         let mut prefs = core::UiPrefs::default();
         core::people::initialize(&mut prefs, &[]);
         prefs.save(&root).unwrap();

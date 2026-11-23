@@ -36,7 +36,10 @@ impl PeopleUi {
         prefs: &mut core::UiPrefs,
         config: &core::Config,
     ) -> Self {
-        let notice = if core::people::initialize(prefs, meetings) && prefs.save(root).is_err() {
+        let notice = if config.features.people
+            && core::people::initialize(prefs, meetings)
+            && prefs.save(root).is_err()
+        {
             prefs.people_existing_meetings = None;
             Some("Could not remember the existing meetings. People will stay hidden until this can be saved.".into())
         } else {
@@ -85,6 +88,9 @@ impl State {
     }
 
     fn set_person_side(&mut self, person: &str, side: Option<Side>) {
+        if !self.config.features.people {
+            return;
+        }
         let mut prefs = self.people.prefs.clone();
         match prefs.save_person_side(&self.store.root, person, &self.tasks.teams, side) {
             Ok(()) => {

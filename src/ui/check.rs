@@ -2778,7 +2778,11 @@ pub fn on_key(s: &mut State, e: &KeyEvent, tx: &mut Tx) -> bool {
 /// finding open: "Daily check today: 2 high, 1 medium. 1 new." None when Daily check is off or
 /// no report has been read yet.
 pub fn last_line(s: &State) -> Option<(String, bool)> {
-    if !s.config.features.daily_check || !s.config.features.memory {
+    if !s
+        .config
+        .features
+        .enabled(sidenote::core::Feature::DailyCheck)
+    {
         return None;
     }
     let c = s.check.latest;

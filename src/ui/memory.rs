@@ -891,7 +891,17 @@ impl State {
         }
     }
 
+    pub(super) fn stop_memory_rewrites(&mut self) {
+        for worker in self.memory.rewrites.values_mut() {
+            worker.cancel.stop();
+            worker.next = None;
+        }
+    }
+
     fn start_rewrite(&mut self, id: &str, request: RevisionRequest) {
+        if !self.config.features.memory {
+            return;
+        }
         if let Some(worker) = self.memory.rewrites.get_mut(id) {
             worker.next = Some(request);
             return;
@@ -930,7 +940,7 @@ impl State {
     }
 
     pub fn migration_accept(&mut self) {
-        if self.memory.preview_running {
+        if !self.config.features.memory || self.memory.preview_running {
             return;
         }
         let Some(fingerprint) = self
@@ -951,7 +961,8 @@ impl State {
     }
 
     pub fn migration_prepare(&mut self, force: bool) {
-        if self.memory.migrated
+        if !self.config.features.memory
+            || self.memory.migrated
             || self.memory.preview_running
             || (!force && self.memory.preview.as_ref().is_some_and(|p| p.prepared))
         {

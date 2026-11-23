@@ -168,7 +168,7 @@ impl Feature {
         match self {
             Self::Tasks => "See all tasks in one place and their count in the sidebar.",
             Self::People => "Browse people and their meeting history.",
-            Self::Memory => "Review memory, proposals and memory badges.",
+            Self::Memory => "Review saved memory and use Daily check.",
             Self::DailyCheck => "Build memory each day and review the alignment report.",
             Self::Projects => "Group meetings with project chips and sidebar filters.",
             Self::Annotations => "Attach notes and pictures to moments in a meeting.",
@@ -243,7 +243,7 @@ impl Features {
         match feature {
             Feature::Tasks => self.tasks,
             Feature::Memory => self.memory,
-            Feature::DailyCheck => self.daily_check,
+            Feature::DailyCheck => self.daily_check && self.memory,
             Feature::Projects => self.projects,
             Feature::OtherDevices => self.other_devices,
             Feature::People => self.people,

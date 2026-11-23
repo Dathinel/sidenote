@@ -1036,7 +1036,7 @@ fn execute(runner_name: &str, dry_run: bool, force: bool) -> io::Result<Option<D
     if !super::Config::load()
         .at(Stage::CheckInput)?
         .features
-        .daily_check
+        .enabled(super::Feature::DailyCheck)
         || !super::DeviceSettings::load()
             .at(Stage::CheckInput)?
             .daily_check
@@ -1102,6 +1102,13 @@ fn execute(runner_name: &str, dry_run: bool, force: bool) -> io::Result<Option<D
     let mut content = report_with_retry(
         &prompt,
         |prompt| {
+            if !super::Config::load()
+                .at(Stage::CheckInput)?
+                .features
+                .enabled(super::Feature::DailyCheck)
+            {
+                return Err(Stage::CheckRunner.error(invalid("Daily check is off")));
+            }
             super::runner_process::run_runner_with_timeout(
                 &runner,
                 prompt.to_owned(),
@@ -1180,8 +1187,10 @@ fn execute(runner_name: &str, dry_run: bool, force: bool) -> io::Result<Option<D
 }
 pub fn run_cli() -> i32 {
     match super::Config::load() {
-        Ok(config) if !config.features.daily_check => {
-            println!("Daily check is off. Turn it on in Settings > Features.");
+        Ok(config) if !config.features.enabled(super::Feature::DailyCheck) => {
+            println!(
+                "Daily check is off. Turn on Memory in Settings > Experimental features, then Daily check in Meetings."
+            );
             return 0;
         }
         Err(error) => {

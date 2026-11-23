@@ -19,6 +19,7 @@ const EVERY: Duration = Duration::from_secs(10);
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) struct Options {
     pub check_date: Option<chrono::NaiveDate>,
+    pub people: bool,
     pub memory: bool,
     pub check: bool,
 }
@@ -26,6 +27,7 @@ impl Default for Options {
     fn default() -> Self {
         Self {
             check_date: None,
+            people: true,
             memory: true,
             check: true,
         }
@@ -92,14 +94,21 @@ impl Data {
         let pipeline = core::load_pipeline(&meetings);
         let store = core::TaskStore::default();
         let saved_store = core::StateStore::default();
-        let affiliations = loaded(core::Config::load()).map(|config| {
-            if FIRST_FRAME.load(Ordering::Acquire) {
-                core::people::Affiliations::load(&config)
-            } else {
-                core::people::Affiliations::identity(&config)
-            }
-        });
-        let companies = loaded(core::companies::Companies::load(&core::state_dir()));
+        let affiliations = options
+            .people
+            .then(|| loaded(core::Config::load()))
+            .flatten()
+            .map(|config| {
+                if FIRST_FRAME.load(Ordering::Acquire) {
+                    core::people::Affiliations::load(&config)
+                } else {
+                    core::people::Affiliations::identity(&config)
+                }
+            });
+        let companies = options
+            .people
+            .then(|| loaded(core::companies::Companies::load(&core::state_dir())))
+            .flatten();
         let company_threads: Vec<_> = companies
             .iter()
             .flat_map(|f| f.catalog.records.keys())
