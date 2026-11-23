@@ -23,6 +23,12 @@ pub const FOCUS_CHECK_AFTER: std::time::Duration = std::time::Duration::from_sec
 pub fn installed() -> bool {
     false
 }
+pub fn channel() -> crate::core::Channel {
+    crate::core::CHANNEL
+}
+pub fn set_channel(_: crate::core::Channel) -> Result<(), String> {
+    Err("Updates are unavailable on Linux.".into())
+}
 pub fn load() -> Status {
     Status {
         phase: Phase::Manual,

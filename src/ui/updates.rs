@@ -1,11 +1,13 @@
 //! Quiet update notices and the device's Updates settings.
 use super::{Event, State, hex, roles, theme::Palette, widgets::hairline};
 use rune::{El, col, el, row};
+use sidenote::core::{CHANNEL, Channel};
 use sidenote::listener::heartbeat;
 use sidenote::updates::{self, Phase, Status};
 
 pub struct Updates {
     pub status: Status,
+    channel: Channel,
     listener: updates::ListenerStatus,
     listener_busy: bool,
     listener_open: bool,
@@ -23,6 +25,7 @@ impl Default for Updates {
     fn default() -> Self {
         Self {
             status: updates::load(),
+            channel: updates::channel(),
             listener: updates::listener_status(),
             listener_busy: false,
             listener_open: false,
@@ -132,6 +135,13 @@ impl State {
         });
     }
     pub fn update_status(&mut self, status: Status) {
+        if status
+            .channel
+            .as_deref()
+            .is_some_and(|name| !name.eq_ignore_ascii_case(channel_label(self.updates.channel)))
+        {
+            return;
+        }
         let preparing = matches!(status.phase, Phase::Preparing | Phase::StoppingListener);
         if self.updates.applying && !preparing {
             return;
@@ -200,6 +210,23 @@ impl State {
             }
         }))
     }
+    fn switch_update_channel(&mut self, channel: Channel) {
+        if self.updates.applying || busy(&self.updates.status) {
+            return;
+        }
+        if !self.updates.scene {
+            if let Err(error) = updates::set_channel(channel) {
+                self.updates.status.error = Some(error);
+                self.updates.status.phase = Phase::Error;
+                return;
+            }
+            self.updates.status = updates::load();
+        }
+        self.updates.channel = channel;
+        self.updates.notes_open = false;
+        self.check_updates();
+    }
+
     fn check_updates(&mut self) {
         if self.updates.scene
             || self.updates.applying
@@ -391,6 +418,13 @@ fn actions(s: &State, p: Palette, footer: bool) -> El {
     }
     actions
 }
+fn channel_label(channel: Channel) -> &'static str {
+    match channel {
+        Channel::Stable => "Stable",
+        Channel::Nightly => "Nightly",
+    }
+}
+
 pub fn section(s: &State, p: Palette) -> El {
     if cfg!(target_os = "linux") {
         return col().w_full().gap(12.0).key("updates-unavailable")
@@ -398,6 +432,17 @@ pub fn section(s: &State, p: Palette) -> El {
             .child(roles::SMALL.wrap("Automatic updates and the tray indicator are unavailable on Linux. Close the window to quit Sidenote.", p.soft));
     }
     let status = &s.updates.status;
+    let (other, channel_help) = match s.updates.channel {
+        Channel::Nightly => (
+            Channel::Stable,
+            "Get prerelease builds. If you switch to Stable, this build stays installed until a newer stable release is available.",
+        ),
+        Channel::Stable if CHANNEL == Channel::Nightly => (
+            Channel::Nightly,
+            "This build stays installed until a newer stable release is available.",
+        ),
+        Channel::Stable => (Channel::Nightly, "Get stable releases."),
+    };
     let checked = status
         .checked
         .as_deref()
@@ -432,6 +477,24 @@ pub fn section(s: &State, p: Palette) -> El {
             p,
         ),
     );
+    application = application
+        .child(hairline(p))
+        .child(super::hex::settings::setting_row(
+            s,
+            "update-channel",
+            &format!("Update channel · {}", channel_label(s.updates.channel)),
+            channel_help,
+            super::widgets::button(
+                &format!("Switch to {}", channel_label(other)),
+                "update-channel-switch",
+                super::widgets::ButtonRole::Secondary,
+                p,
+            )
+            .disabled(status.phase == Phase::Manual || busy(status) || s.updates.applying)
+            .on_press(move |s: &mut State| s.switch_update_channel(other)),
+            false,
+            p,
+        ));
     let title = match status.phase {
         Phase::Manual => "Updates are off for this manual install".into(),
         Phase::Preparing => "Preparing update".into(),
@@ -567,7 +630,7 @@ pub fn scene(s: &mut State, phase: Phase) {
         notes: "Updates now download in the background. Install when you are ready.\nYour meetings and notes stay on this device.".into(),
         checked: Some("2026-11-09T12:40:00+05:30".into()),
         error: (phase == Phase::Error).then(|| "Could not verify the update. Your current version is still running.".into()),
-        phase };
+        phase, ..Default::default() };
     if s.updates.status.phase == Phase::Idle {
         s.updates.status.notes.clear();
     }
