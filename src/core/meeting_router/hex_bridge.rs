@@ -83,7 +83,8 @@ impl std::fmt::Display for HexFailure {
     }
 }
 impl std::error::Error for HexFailure {}
-type Result<T> = std::result::Result<T, HexFailure>;
+type Result<T> = HexResult<T>;
+pub(super) type HexResult<T> = std::result::Result<T, HexFailure>;
 #[derive(Debug, PartialEq)]
 pub struct HexReading {
     pub request: HexRequest,
@@ -203,6 +204,16 @@ impl<C: HexCommand> HexBridge<C> {
             return Err(Unsupported);
         }
         Ok(v)
+    }
+    #[cfg(windows)]
+    pub(super) fn recording(&mut self, remaining: Duration) -> Result<bool> {
+        self.limit(remaining);
+        // Model preparation and capture jobs can belong to this attempt.
+        match self.status()?["meeting"]["state"].as_str() {
+            Some("idle") => Ok(false),
+            Some("recording" | "paused") => Ok(true),
+            _ => Err(Unsupported),
+        }
     }
     pub(super) fn probe_idle(&mut self) -> Result<bool> {
         match self.status() {

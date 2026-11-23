@@ -13,6 +13,8 @@ pub enum Reason {
     SelectedRevisionUnavailable,
     PendingRecordInvalid,
     RoutingFailed,
+    PausedForRecording,
+    RecordingStatusUnknown,
     CpuLanguageAssetsUnavailable,
     SpeechPackRefused,
     #[serde(alias = "cpu_language_models_downloading")]
@@ -41,6 +43,12 @@ impl Reason {
                 "The language-routing request record was damaged. Notes use the captured Hex transcript."
             }
             Self::RoutingFailed => "A language pass failed. Notes use the captured Hex transcript.",
+            Self::PausedForRecording => {
+                "A new meeting started, so the Hindi and Telugu passes paused. Notes use the English Hex captured."
+            }
+            Self::RecordingStatusUnknown => {
+                "Hex recording status could not be checked, so the Hindi and Telugu passes paused. Notes use the English Hex captured."
+            }
             Self::CpuLanguageAssetsUnavailable => {
                 "CPU language passes are unavailable because the ONNX runtime or a verified model pack is missing. Notes use the captured Hex transcript."
             }

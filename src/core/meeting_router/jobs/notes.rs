@@ -149,6 +149,8 @@ pub(crate) fn notes_input_sized(
                 _ => Reason::CpuLanguageAssetsUnavailable,
             },
             Some(SPEECH_PACK_REFUSED) => Reason::SpeechPackRefused,
+            Some(PAUSED_RECORDING) => Reason::PausedForRecording,
+            Some(PAUSED_STATUS_UNKNOWN) => Reason::RecordingStatusUnknown,
             _ => Reason::RoutingFailed,
         });
         if attempt_failure.is_none() && now_ms < deadline {

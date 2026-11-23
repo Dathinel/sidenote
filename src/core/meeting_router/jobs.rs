@@ -54,6 +54,50 @@ struct Outcome {
 
 const CPU_ASSETS_UNAVAILABLE: &str = "cpu_language_assets_unavailable";
 const SPEECH_PACK_REFUSED: &str = "speech_pack_refused";
+const PAUSED_RECORDING: &str = "paused: recording";
+const PAUSED_STATUS_UNKNOWN: &str = "paused: recording status unknown";
+const RECORDING_POLL: Duration = Duration::from_secs(2);
+
+struct RecordingWatch<'a> {
+    probe: Option<&'a mut dyn FnMut(Duration) -> hex_bridge::HexResult<bool>>,
+    interval: Duration,
+    stopping: &'a dyn Fn() -> bool,
+}
+
+impl Default for RecordingWatch<'_> {
+    fn default() -> Self {
+        Self {
+            probe: None,
+            interval: RECORDING_POLL,
+            stopping: &crate::service::stopping,
+        }
+    }
+}
+
+impl RecordingWatch<'_> {
+    fn pause(&mut self, remaining: Duration) -> Option<&'static str> {
+        match self.probe.as_mut()?(remaining) {
+            Ok(false) => None,
+            Ok(true) => Some(PAUSED_RECORDING),
+            Err(_) => Some(PAUSED_STATUS_UNKNOWN),
+        }
+    }
+
+    fn admission_paused(&mut self, work: &Path, pending: &Pending) -> io::Result<bool> {
+        let Some(pause) = self.pause(RECORDING_POLL) else {
+            return Ok(false);
+        };
+        record_pause(
+            work,
+            pending,
+            &Outcome {
+                error: Some(pause.into()),
+                ..Outcome::default()
+            },
+        )?;
+        Ok(true)
+    }
+}
 
 #[derive(Debug)]
 struct CpuAssetsUnavailable(Option<u8>);
@@ -216,7 +260,7 @@ fn enqueue_with(root: &Path, meetings: &Path, id: &str, automatic: bool) -> Resu
         return Ok(());
     }
     let _lock = pending_lock(root, id)?;
-    if (automatic && automatic_accepted_locked(root, id)?)
+    if (automatic && automatic_accepted_locked(root, meetings, id)?)
         || queue(root).join(format!("{id}.json")).exists()
     {
         return Ok(());
@@ -258,7 +302,7 @@ fn automatic_revision(root: &Path, id: &str) -> io::Result<Option<String>> {
         Err(e) => Err(e),
     }
 }
-fn automatic_accepted_locked(root: &Path, id: &str) -> Result<bool> {
+fn automatic_accepted_locked(root: &Path, meetings: &Path, id: &str) -> Result<bool> {
     let pending: Option<Pending> = store_io::read(&queue(root).join(format!("{id}.json")))?;
     if let Some(pending) = pending {
         if pending.id != id {
@@ -266,7 +310,7 @@ fn automatic_accepted_locked(root: &Path, id: &str) -> Result<bool> {
         }
         return Ok(true);
     }
-    match snapshot(root, id)? {
+    match snapshot_in(root, meetings, id)? {
         Some(job) => completed(root, &job),
         None => Ok(false),
     }
@@ -287,7 +331,7 @@ pub(crate) fn automatic_accepted(id: &str) -> Result<bool> {
         return Ok(false);
     };
     let _lock = pending_lock(&root, id)?;
-    automatic_accepted_locked(&root, id)
+    automatic_accepted_locked(&root, &super::super::meetings_dir(), id)
 }
 fn complete_automatic(root: &Path, id: &str, revision: &str) -> io::Result<()> {
     // Persist before acknowledging: a crash between these writes safely reuses output.
@@ -374,10 +418,14 @@ pub(crate) fn read_baseline(bytes: &[u8]) -> Result<Vec<Chunk>> {
 }
 
 fn snapshot(root: &Path, id: &str) -> Result<Option<Job>> {
+    snapshot_in(root, &super::super::meetings_dir(), id)
+}
+
+fn snapshot_in(root: &Path, meetings: &Path, id: &str) -> Result<Option<Job>> {
     if !valid_id(id) {
         return Err("Invalid meeting id".into());
     }
-    let folder = super::super::meetings_dir().join(id);
+    let folder = meetings.join(id);
     let input = super::inputs::Snapshot::capture(&folder)?;
     if super::super::recording_guard::eligibility_captured(
         root,
@@ -465,7 +513,12 @@ fn resume(child: &std::process::Child) -> io::Result<()> {
         result
     }
 }
-fn supervise(mut command: Command, seconds: f64, active: Option<&Path>) -> Outcome {
+fn supervise(
+    mut command: Command,
+    seconds: f64,
+    active: Option<&Path>,
+    watch: &mut RecordingWatch<'_>,
+) -> Outcome {
     if let Err(error) = crate::platform::contain_command(&mut command) {
         return Outcome {
             error: Some(error.to_string()),
@@ -514,6 +567,8 @@ fn supervise(mut command: Command, seconds: f64, active: Option<&Path>) -> Outco
         let _ = store_io::write(path, &serde_json::json!({"pid":child.id()}));
     }
     let start = Instant::now();
+    let budget = Duration::try_from_secs_f64(seconds).unwrap_or_default();
+    let mut next_probe = watch.interval;
     let outcome = loop {
         match child.try_wait() {
             Ok(Some(status)) => {
@@ -523,10 +578,19 @@ fn supervise(mut command: Command, seconds: f64, active: Option<&Path>) -> Outco
                     ..Outcome::default()
                 };
             }
-            Ok(None) if !crate::service::stopping() && start.elapsed().as_secs_f64() < seconds => {
-                thread::sleep(Duration::from_millis(50))
-            }
-            value => {
+            state => {
+                let elapsed = start.elapsed();
+                let mut pause = None;
+                if state.is_ok() && !(watch.stopping)() && elapsed < budget {
+                    if watch.probe.is_some() && elapsed >= next_probe {
+                        next_probe = elapsed + watch.interval;
+                        pause = watch.pause(budget - elapsed);
+                    }
+                    if pause.is_none() && !(watch.stopping)() && start.elapsed() < budget {
+                        thread::sleep(Duration::from_millis(50));
+                        continue;
+                    }
+                }
                 drop(job); // Kill the complete tree before waiting, including normalization/Hex descendants.
                 let _ = child.kill();
                 let status = child.wait().ok();
@@ -535,8 +599,8 @@ fn supervise(mut command: Command, seconds: f64, active: Option<&Path>) -> Outco
                 }
                 return Outcome {
                     exit_code: status.and_then(|s| s.code()),
-                    timed_out: value.is_ok(),
-                    error: Some("process deadline or wait failure".into()),
+                    timed_out: pause.is_none() && state.is_ok() && !(watch.stopping)(),
+                    error: Some(pause.unwrap_or("process deadline or wait failure").into()),
                     ..Outcome::default()
                 };
             }
@@ -555,6 +619,7 @@ fn run_worker(
     duration: f64,
     config: Option<&crate::core::Config>,
     active: Option<&Path>,
+    watch: &mut RecordingWatch<'_>,
 ) -> Result<Outcome> {
     let computed = (duration * 4.0 + 120.0).clamp(120.0, 86400.0);
     let budget = if let Some(config) = config {
@@ -573,6 +638,7 @@ fn run_worker(
         command,
         seconds_arg("--router-timeout-seconds").unwrap_or(budget),
         active,
+        watch,
     ))
 }
 
@@ -670,7 +736,7 @@ pub(crate) fn run_one_in(request: &Path, root: &Path) -> Result<()> {
             .arg(input)
             .args(["-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le"])
             .arg(&output);
-        let outcome = supervise(command, deadline, None);
+        let outcome = supervise(command, deadline, None, &mut RecordingWatch::default());
         store_io::write(&work.join("normalization-outcome.json"), &outcome)?;
         if !outcome.success {
             return Err("Audio normalization failed or timed out".into());
@@ -761,9 +827,7 @@ pub fn run_pending() -> Result<()> {
         Ok(command)
     })
 }
-pub(crate) fn run_pending_with(
-    mut worker: impl FnMut(&Job, &Path) -> Result<Command>,
-) -> Result<()> {
+pub(crate) fn run_pending_with(worker: impl FnMut(&Job, &Path) -> Result<Command>) -> Result<()> {
     let _update_activity = crate::updates::activity()?;
     let root = super::super::state_dir();
     let args: Vec<_> = std::env::args().collect();
@@ -779,6 +843,29 @@ pub(crate) fn run_pending_with(
             enqueue(id)?;
         }
     }
+    let mut watch = RecordingWatch::default();
+    #[cfg(windows)]
+    let mut probe = |remaining| {
+        let speech = path_arg("--hex-cli")
+            .map_or_else(HexSpeech::default, |executable| HexSpeech { executable });
+        hex_bridge::HexBridge::new(speech).recording(remaining)
+    };
+    #[cfg(windows)]
+    if !cfg!(test) {
+        watch.probe = Some(&mut probe);
+    }
+    let meetings = super::super::meetings_dir();
+    run_pending_in(root, &meetings, &args, automatic, worker, &mut watch)
+}
+
+fn run_pending_in(
+    root: PathBuf,
+    meetings: &Path,
+    args: &[String],
+    automatic: bool,
+    mut worker: impl FnMut(&Job, &Path) -> Result<Command>,
+    watch: &mut RecordingWatch<'_>,
+) -> Result<()> {
     if !configured_at(&root)? {
         return Ok(());
     }
@@ -795,7 +882,7 @@ pub(crate) fn run_pending_with(
     fs::create_dir_all(queue(&root))?;
     let mut attempted = HashSet::new();
     loop {
-        if crate::service::stopping() {
+        if (watch.stopping)() {
             return Ok(());
         }
         let mut found = false;
@@ -821,7 +908,7 @@ pub(crate) fn run_pending_with(
                 continue;
             };
             found = true;
-            let mut job = match snapshot(&root, &pending.id) {
+            let mut job = match snapshot_in(&root, meetings, &pending.id) {
                 Ok(Some(job)) => job,
                 Ok(None) => continue,
                 Err(_) => {
@@ -852,8 +939,8 @@ pub(crate) fn run_pending_with(
                 )
             {
                 if destination.exists()
-                    && !crate::service::stopping()
-                    && snapshot(&root, &job.id).is_ok_and(|latest| {
+                    && !(watch.stopping)()
+                    && snapshot_in(&root, meetings, &job.id).is_ok_and(|latest| {
                         latest.is_some_and(|latest| latest.input_revision == job.input_revision)
                     })
                 {
@@ -869,8 +956,8 @@ pub(crate) fn run_pending_with(
                     english.warnings.clear();
                     write_transcript(&destination, &english)?;
                 }
-                if crate::service::stopping()
-                    || !snapshot(&root, &job.id).is_ok_and(|latest| {
+                if (watch.stopping)()
+                    || !snapshot_in(&root, meetings, &job.id).is_ok_and(|latest| {
                         latest.is_some_and(|latest| latest.input_revision == job.input_revision)
                     })
                 {
@@ -908,6 +995,10 @@ pub(crate) fn run_pending_with(
                     continue;
                 }
             }
+            let admitted = Instant::now();
+            if watch.admission_paused(&work, &pending)? {
+                continue;
+            }
             let request = work.join("request.json");
             job.generation = pending.generation;
             let mut command = match worker(&job, &request) {
@@ -937,7 +1028,12 @@ pub(crate) fn run_pending_with(
             }
             let duration = job.baseline.iter().map(|c| c.end).fold(0.0, f64::max);
             let settings = if labs { notes::enabled(&root)? } else { None };
-            if !configured_at(&root)? {
+            if admitted.elapsed() >= RECORDING_POLL && watch.admission_paused(&work, &pending)? {
+                cleanup_work(&work);
+                continue;
+            }
+            if (watch.stopping)() || !configured_at(&root)? {
+                cleanup_work(&work);
                 return Ok(());
             }
             let mut outcome = run_worker(
@@ -945,10 +1041,19 @@ pub(crate) fn run_pending_with(
                 duration,
                 settings.as_ref(),
                 Some(&work.join("active.json")),
+                watch,
             )?;
             if !configured_at(&root)? {
                 cleanup_work(&work);
                 return Ok(());
+            }
+            if matches!(
+                outcome.error.as_deref(),
+                Some(PAUSED_RECORDING | PAUSED_STATUS_UNKNOWN)
+            ) {
+                record_pause(&work, &pending, &outcome)?;
+                cleanup_work(&work);
+                continue;
             }
             if let Some(error) = fs::read(work.join("failure.json"))
                 .ok()
@@ -957,8 +1062,8 @@ pub(crate) fn run_pending_with(
             {
                 outcome.error = Some(error);
             }
-            let mut stable = !crate::service::stopping();
-            match snapshot(&root, &job.id) {
+            let mut stable = !(watch.stopping)();
+            match snapshot_in(&root, meetings, &job.id) {
                 Ok(Some(latest)) if latest.input_revision != job.input_revision => {
                     stable = false;
                     outcome.success = false;
@@ -1065,6 +1170,13 @@ pub(crate) fn run_pending_with(
         }
     }
     Ok(())
+}
+
+fn record_pause(work: &Path, pending: &Pending, outcome: &Outcome) -> io::Result<()> {
+    store_io::write(
+        &work.join("attempt.json"),
+        &serde_json::json!({"generation":pending.generation,"child":outcome,"pending_retained":true,"retry_after_ms":chrono::Utc::now().timestamp_millis()+30_000}),
+    )
 }
 
 fn publish_attempt(
