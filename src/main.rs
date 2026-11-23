@@ -13,33 +13,28 @@ fn default_test_paths_are_isolated_from_owner_appdata() {
 }
 #[cfg(feature = "desktop")]
 mod ui;
-fn unavailable_in_stable(args: &[std::ffi::OsString]) -> Option<&std::ffi::OsStr> {
+fn unavailable_in_stable(args: &[std::ffi::OsString]) -> Option<&str> {
+    const NIGHTLY_FLAGS: &[&str] = &[
+        "--server",
+        "--speech-worker",
+        "--speech-port",
+        "--sync-control",
+        "--mcp",
+        "--mcp-access",
+        "--mcp-port",
+        "--ops",
+        "--cpu-models",
+        "--relay-preview-headless",
+    ];
+    if args
+        .windows(2)
+        .any(|pair| pair[0] == "--device-role" && (pair[1] == "server" || pair[1] == "hub"))
+    {
+        return Some("Server or hub mode");
+    }
     args.iter()
-        .map(|arg| arg.as_os_str())
-        .find(|arg| {
-            matches!(
-                arg.to_str(),
-                Some(
-                    "--server"
-                        | "--speech-worker"
-                        | "--speech-port"
-                        | "--sync-control"
-                        | "--mcp"
-                        | "--mcp-access"
-                        | "--mcp-port"
-                        | "--ops"
-                        | "--cpu-models"
-                        | "--relay-preview-headless"
-                )
-            ) || (!cfg!(windows) && *arg == "--listen")
-        })
-        .or_else(|| {
-            args.windows(2)
-                .find(|pair| {
-                    pair[0] == "--device-role" && (pair[1] == "server" || pair[1] == "hub")
-                })
-                .map(|_| std::ffi::OsStr::new("Server or hub mode"))
-        })
+        .filter_map(|arg| arg.to_str())
+        .find(|arg| NIGHTLY_FLAGS.contains(arg) || (!cfg!(windows) && *arg == "--listen"))
 }
 fn main() {
     #[cfg(feature = "desktop")]
@@ -48,10 +43,7 @@ fn main() {
     if matches!(sidenote::core::CHANNEL, sidenote::core::Channel::Stable)
         && let Some(arg) = unavailable_in_stable(&args)
     {
-        eprintln!(
-            "{} is unavailable in Sidenote Stable.",
-            arg.to_string_lossy()
-        );
+        eprintln!("{arg} is unavailable in Sidenote Stable.");
         std::process::exit(2);
     }
     #[cfg(target_os = "linux")]

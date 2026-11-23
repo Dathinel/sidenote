@@ -66,9 +66,9 @@ jobs:
             target/debug
           key: ci-ubuntu-24.04-${{ steps.rust.outputs.cachekey }}-${{ hashFiles('Cargo.lock', '.cargo/config.toml') }}
           restore-keys: ci-ubuntu-24.04-${{ steps.rust.outputs.cachekey }}-
-      - name: Clippy on Nightly and Nightly ASR test targets
+      - name: Clippy on Stable and Nightly ASR test targets
         run: |
-          cargo clippy --workspace --locked --all-targets --features nightly -- -D warnings
+          cargo clippy --workspace --locked --all-targets --features asr-runtime -- -D warnings
           cargo clippy --workspace --locked --all-targets --features nightly,asr-runtime -- -D warnings
       - name: Test Stable and Nightly
         shell: bash
@@ -98,9 +98,10 @@ jobs:
                 --skip=service::speech::proofs::faults::retained_status_is_bounded_and_cannot_kill_the_listener
                 --skip=service::speech::proofs::locking::job_creation_keeps_intake_ownership_until_processing_is_locked
                 --skip=tests::server_role_exposes_only_scoped_host_probe)
-          cargo test --locked --workspace --no-fail-fast --features nightly -- "${skip[@]}"
+          cargo test --locked --workspace --no-fail-fast --features asr-runtime -- "${skip[@]}"
           cargo test --locked --workspace --no-fail-fast --features nightly,asr-runtime -- "${skip[@]}"
           cargo test --locked -p sidenote --no-default-features --test channel_boundary
+          cargo test --locked -p sidenote --no-default-features --features asr-runtime --test channel_boundary
           cargo test --locked -p sidenote --lib --bin sidenote -- \
             core::agent_tools:: core::ask_options:: core::meeting_watch:: \
             ui::ask_switch_tests::a_fallback_answer_through_the_real_ask_names_the_helper_that_answered_and_survives_reload
@@ -189,9 +190,10 @@ jobs:
       - name: Run Windows pipeline tests
         if: needs.changes.outputs.tools == 'true'
         run: python -I tools/pipeline-tests.py
-      - name: Compile Nightly test targets with and without ASR
+      - name: Compile Stable ASR and Nightly test targets
         shell: bash
         run: |
+          cargo check --workspace --locked --tests --features asr-runtime
           cargo check --workspace --locked --tests --features nightly
           cargo check --workspace --locked --tests --features nightly,asr-runtime
       - name: Build the sync worker and fault-test fixture

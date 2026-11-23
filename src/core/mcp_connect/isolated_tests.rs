@@ -168,6 +168,7 @@ fn files_in(agent: &Agent) -> usize {
     fs::read_dir(agent.path.parent().unwrap()).unwrap().count()
 }
 #[test]
+#[cfg(feature = "nightly")]
 fn json_agents_are_never_written_by_add_or_add_all() {
     let sandbox = Sandbox::new();
     for client in [Client::ClaudeDesktop, Client::Cursor, Client::OpenCode] {
@@ -269,6 +270,7 @@ fn unreadable_configs_are_reported_and_never_changed() {
     }
 }
 #[test]
+#[cfg(feature = "nightly")]
 fn add_all_never_writes_json_agents_and_says_where_to_paste() {
     let sandbox = Sandbox::new();
     let mut agents: Vec<_> = [Client::OpenCode, Client::Cursor, Client::ClaudeDesktop]
@@ -716,6 +718,7 @@ fn a_cli_that_finishes_in_time_returns_its_output_and_status() {
 }
 
 #[test]
+#[cfg(feature = "nightly")]
 fn add_all_keeps_added_agents_untouched_and_reports_every_result() {
     let sandbox = Sandbox::new();
     let mut added = prepared(&sandbox, Client::Cursor);

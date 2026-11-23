@@ -679,7 +679,7 @@ impl Drop for Preview {
 }
 
 type Registry = Mutex<BTreeMap<PathBuf, Arc<Preview>>>;
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(all(test, target_os = "linux", feature = "nightly"))]
 mod linux_unavailable_tests {
     use super::*;
     #[test]
@@ -1035,6 +1035,7 @@ mod tests {
     }
     #[test]
     #[cfg(windows)]
+    #[cfg(feature = "nightly")]
     fn manual_and_meeting_edits_commit_together_without_folder_writes() -> anyhow::Result<()> {
         let fixture = tempfile::tempdir()?;
         let root = fixture.path();
@@ -1094,6 +1095,7 @@ mod tests {
     }
     #[test]
     #[cfg(windows)]
+    #[cfg(feature = "nightly")]
     fn legacy_identity_backup_drift_and_resume_keep_both_collections() -> anyhow::Result<()> {
         let fixture = tempfile::tempdir()?;
         let root = fixture.path();
@@ -1158,6 +1160,7 @@ mod tests {
     }
     #[test]
     #[cfg(windows)]
+    #[cfg(feature = "nightly")]
     fn a_stale_address_save_cannot_restore_an_old_pairing_group() -> anyhow::Result<()> {
         let fixture = tempfile::tempdir()?;
         let root = fixture.path();
@@ -1247,6 +1250,7 @@ mod presence_tests {
 
     #[test]
     #[cfg(windows)]
+    #[cfg(feature = "nightly")]
     fn last_seen_is_written_when_a_device_drops_and_a_corrupt_file_does_not_stop_sync()
     -> anyhow::Result<()> {
         let d = tempfile::tempdir()?;
@@ -1276,6 +1280,7 @@ mod presence_tests {
     }
 
     #[cfg(windows)]
+    #[cfg(feature = "nightly")]
     fn observation(statuses: Vec<PeerStatus>, members: &[[u8; 32]]) -> Observation {
         Observation {
             statuses,
@@ -1284,6 +1289,7 @@ mod presence_tests {
         }
     }
     #[cfg(windows)]
+    #[cfg(feature = "nightly")]
     fn peer(key: u8, online: bool, last_seen: Option<u64>) -> PeerStatus {
         PeerStatus {
             device: [key; 32],
@@ -1291,6 +1297,7 @@ mod presence_tests {
         }
     }
     #[cfg(windows)]
+    #[cfg(feature = "nightly")]
     fn open_with_seen_file(root: &Path, file: Option<&[u8]>) -> anyhow::Result<Arc<Preview>> {
         std::fs::create_dir_all(root.join("local/relay"))?;
         if let Some(file) = file {
@@ -1333,6 +1340,7 @@ mod presence_tests {
 
     #[test]
     #[cfg(windows)]
+    #[cfg(feature = "nightly")]
     fn presence_lookup_survives_a_malformed_or_out_of_range_seen_file() -> anyhow::Result<()> {
         let (one, two) = (pairing::token(&[1; 32]), pairing::token(&[2; 32]));
         let members = [[1; 32], [2; 32]];
@@ -1354,6 +1362,7 @@ mod presence_tests {
 
     #[test]
     #[cfg(windows)]
+    #[cfg(feature = "nightly")]
     fn a_failed_seen_write_is_tried_again_by_a_refresh_and_a_stop() -> anyhow::Result<()> {
         let one = pairing::token(&[1; 32]);
         let members = [[1; 32]];
@@ -1395,6 +1404,7 @@ mod presence_tests {
 
     #[test]
     #[cfg(windows)]
+    #[cfg(feature = "nightly")]
     fn presence_history_is_persisted_by_the_refresh_and_the_stop() -> anyhow::Result<()> {
         let (one, two) = (pairing::token(&[1; 32]), pairing::token(&[2; 32]));
         let members = [[1; 32], [2; 32]];

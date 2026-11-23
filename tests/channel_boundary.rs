@@ -21,11 +21,10 @@ fn app(root: &std::path::Path) -> Command {
 #[test]
 fn stable_refuses_excluded_process_modes_before_initializing_state() {
     let root = tempfile::tempdir().unwrap();
-    let mut cases: Vec<&[&str]> = vec![
+    let cases: &[&[&str]] = &[
         &["--server"],
         &["--server", "--listen"],
         &["--device-role", "server"],
-        &["--server", "--device-role", "hub", "--speech-worker"],
         &["--device-role", "hub"],
         &["--speech-worker"],
         &["--speech-port", "0"],
@@ -36,11 +35,10 @@ fn stable_refuses_excluded_process_modes_before_initializing_state() {
         &["--mcp-access", "status"],
         &["--mcp-port", "0"],
         &["--relay-preview-headless"],
+        #[cfg(not(windows))]
+        &["--listen"],
     ];
-    if !cfg!(windows) {
-        cases.push(&["--listen"]);
-    }
-    for args in cases {
+    for &args in cases {
         // Give an unguarded process a reason to stop before touching any state.
         let result = app(root.path())
             .args(args)

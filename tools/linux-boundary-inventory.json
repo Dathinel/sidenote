@@ -77,7 +77,7 @@
 
   "src/core/companies_tests.rs": "03038381f33d5ca95247c95945096f6edac31857fdb90ebfaf345601b2a52f56",
 
-  "src/core/config.rs": "9dbbaf074fd29f15e96e896acd4850a7c479b9811f3ead2485bde4997a474387",
+  "src/core/config.rs": "ccf232f7f92a997f495eaf2b4397a8cdbeab8d2c00414c13c9c840fb88a78c54",
 
   "src/core/daily_check.rs": "a23f26f0296493c7a3f8ee731dc0f8a032cd3a237f84ad947c4c61f9d1be6a69",
 
@@ -109,7 +109,7 @@
 
   "src/core/mcp_connect.rs": "2988ef0b0f9dcf354d6f8997d90845f2cf97f965b4cea667cc574f8d4dc9ca03",
 
-  "src/core/mcp_connect/isolated_tests.rs": "5cfa80ba44ac60c9df438f5318291637c27b669845fcaecb0852ccda7ec45745",
+  "src/core/mcp_connect/isolated_tests.rs": "4170b47a31b0a01c841be8a5fd15e5590ae87ee68907de74f2e39dd49c41f167",
 
   "src/core/mcp_connect/json_config.rs": "a5597e62557288a1ffdc8a5cf00a3caefbe3b905a0a63e733fe4c9d1df5e8fac",
 
@@ -269,13 +269,13 @@
 
   "src/core/recording_source/tests.rs": "f599f85ce6e360ba9ee314037e8f7036c9de16939d02cee773662730c9b84f84",
 
-  "src/core/relay_preview.rs": "c07b5eb76ff0bb2d6372b53904e50755580576e18f906aa5909c819908a9d989",
+  "src/core/relay_preview.rs": "5088a451d31db1364eae37f30ca88a97ff1232c56d7aad5753052243362ae253",
 
-  "src/core/relay_preview/migration.rs": "e9e0e4c86be43027861825ba387c26ca70a9f8567964de61c9113e2e79a8559f",
+  "src/core/relay_preview/migration.rs": "b17e4acbce444f4db154ac6b15b76c33d4e0f05d54eb44cc0678b34db83b9b02",
 
-  "src/core/relay_preview/operations.rs": "7810dddb219c1c1fc9d0763b666a4fc337a788404adeb74d372c6e6095fe97fd",
+  "src/core/relay_preview/operations.rs": "0c7146202b1c86b40937bef20e4083c9e93d329c5eba83600f4296b848ca344a",
 
-  "src/core/relay_preview/pairing.rs": "7f1907b23037fd89444663908d43ac93c946ccdaf28214e537802e314e3c17c9",
+  "src/core/relay_preview/pairing.rs": "64b36f6d389d185a8f5466facc2c9694a13f0021b13a3e8e0ee78ff78eb3618a",
 
   "src/core/relay_preview/shared.rs": "373e85ff8212a7cc4477c311aefb04c597837df07b6c9ec996270bda73d80bd8",
 
@@ -421,7 +421,7 @@
 
   "src/ui/hex/connection/stop_tests/readiness.rs": "1affb66b203a249c971286341d62d22e1b33b3ce745619949bae00e3208c6d81",
 
-  "src/ui/hex/settings.rs": "49a1c9d7e4d48a7c5f64b1711254f137c5b4c66de8104eb49bf273fa6142cd74",
+  "src/ui/hex/settings.rs": "cb7a3321410b78cacc37de359c5156534dd2eaf89bd8c912adc71ffe38c006d8",
 
   "src/ui/hex/setup.rs": "494e5d0651bff961f55877cadcd419e11f9e9b25221059e9520e458a52be2eb2",
 

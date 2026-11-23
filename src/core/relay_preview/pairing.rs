@@ -385,6 +385,7 @@ mod security_tests {
     }
     #[test]
     #[cfg(windows)]
+    #[cfg(feature = "nightly")]
     fn devices_releases_mode_lock_while_loading_tasks() -> anyhow::Result<()> {
         use std::os::windows::fs::OpenOptionsExt;
 
@@ -449,6 +450,7 @@ mod security_tests {
 
     #[test]
     #[cfg(windows)]
+    #[cfg(feature = "nightly")]
     fn a_renamed_device_shows_its_new_name_and_a_bad_name_changes_nothing() -> anyhow::Result<()> {
         let d = tempfile::tempdir()?;
         let root = d.path();
@@ -494,6 +496,7 @@ mod security_tests {
     }
     #[test]
     #[cfg(windows)]
+    #[cfg(feature = "nightly")]
     fn uncertain_pairing_status_and_peer_name_survive_restart() -> anyhow::Result<()> {
         let d = tempfile::tempdir()?;
         let root = d.path();
@@ -525,6 +528,7 @@ mod security_tests {
         Ok(())
     }
     #[cfg(windows)]
+    #[cfg(feature = "nightly")]
     fn enable(root: &Path) -> anyhow::Result<Arc<Preview>> {
         Settings {
             enabled: true,
@@ -535,6 +539,7 @@ mod security_tests {
     }
     /// Two devices that adopted each other and have exchanged their shared documents.
     #[cfg(windows)]
+    #[cfg(feature = "nightly")]
     fn paired(a_root: &Path, b_root: &Path) -> anyhow::Result<(Arc<Preview>, Arc<Preview>)> {
         let (a, b) = (enable(a_root)?, enable(b_root)?);
         for (me, other, other_name) in [(&a, &b, "Peer B"), (&b, &a, "Peer A")] {
@@ -554,6 +559,7 @@ mod security_tests {
     }
     /// What the relay does for the shared document: the receiver merges the sender's changes.
     #[cfg(windows)]
+    #[cfg(feature = "nightly")]
     fn sync_documents(from: &Preview, to: &Preview) -> anyhow::Result<()> {
         let mut theirs = from.device.load("tasks").map_err(failed)?;
         to.device
@@ -567,6 +573,7 @@ mod security_tests {
         Ok(())
     }
     #[cfg(windows)]
+    #[cfg(feature = "nightly")]
     fn other_names(root: &Path) -> io::Result<Vec<String>> {
         Ok(devices(root)?
             .into_iter()
@@ -576,6 +583,7 @@ mod security_tests {
     }
     #[test]
     #[cfg(windows)]
+    #[cfg(feature = "nightly")]
     fn a_rename_made_with_relay_on_reaches_the_other_device() -> anyhow::Result<()> {
         let (da, db) = (tempfile::tempdir()?, tempfile::tempdir()?);
         let (a, b) = paired(da.path(), db.path())?;
@@ -591,6 +599,7 @@ mod security_tests {
     }
     #[test]
     #[cfg(windows)]
+    #[cfg(feature = "nightly")]
     fn a_rename_made_with_relay_off_is_published_when_relay_is_turned_on() -> anyhow::Result<()> {
         let (da, db) = (tempfile::tempdir()?, tempfile::tempdir()?);
         let (a, b) = paired(da.path(), db.path())?;
