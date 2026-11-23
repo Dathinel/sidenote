@@ -260,7 +260,7 @@ fn enqueue_with(root: &Path, meetings: &Path, id: &str, automatic: bool) -> Resu
         return Ok(());
     }
     let _lock = pending_lock(root, id)?;
-    if (automatic && automatic_accepted_locked(root, id)?)
+    if (automatic && automatic_accepted_locked(root, meetings, id)?)
         || queue(root).join(format!("{id}.json")).exists()
     {
         return Ok(());
@@ -302,7 +302,7 @@ fn automatic_revision(root: &Path, id: &str) -> io::Result<Option<String>> {
         Err(e) => Err(e),
     }
 }
-fn automatic_accepted_locked(root: &Path, id: &str) -> Result<bool> {
+fn automatic_accepted_locked(root: &Path, meetings: &Path, id: &str) -> Result<bool> {
     let pending: Option<Pending> = store_io::read(&queue(root).join(format!("{id}.json")))?;
     if let Some(pending) = pending {
         if pending.id != id {
@@ -310,7 +310,7 @@ fn automatic_accepted_locked(root: &Path, id: &str) -> Result<bool> {
         }
         return Ok(true);
     }
-    match snapshot(root, id)? {
+    match snapshot_in(root, meetings, id)? {
         Some(job) => completed(root, &job),
         None => Ok(false),
     }
@@ -331,7 +331,7 @@ pub(crate) fn automatic_accepted(id: &str) -> Result<bool> {
         return Ok(false);
     };
     let _lock = pending_lock(&root, id)?;
-    automatic_accepted_locked(&root, id)
+    automatic_accepted_locked(&root, &super::super::meetings_dir(), id)
 }
 fn complete_automatic(root: &Path, id: &str, revision: &str) -> io::Result<()> {
     // Persist before acknowledging: a crash between these writes safely reuses output.

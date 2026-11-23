@@ -138,8 +138,14 @@ fn recording_pause_preserves_the_owned_attempt_and_retries() {
         config.engine_settings.stage_deadline_seconds = Some(10);
         let settings = root.join("config.json");
         store_io::write(&settings, &config).unwrap();
-        enqueue_with(root, &meetings, id, true).unwrap();
         let path = queue(root).join(format!("{id}.json"));
+        enqueue_with(root, &meetings, id, true).expect(
+            "automatic enqueue must resolve the fixture in its supplied meetings directory",
+        );
+        assert!(
+            path.is_file(),
+            "automatic enqueue skipped an eligible, unsuppressed fixture with no completion receipt"
+        );
         let pending = fs::read(&path).unwrap();
         let work = handoff::work(root, id);
         let attempt = work.join("attempt.json");
