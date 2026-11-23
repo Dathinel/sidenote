@@ -4,8 +4,8 @@ use super::{
     theme::{BODY, BODY_LH, Palette},
 };
 use rune::{
-    Align, Color, Cursor, El, Icon, Key, Link, LinkPaint, ScrollSpec, Side, Span, TextStyle, Transition,
-    col, el, row, text,
+    Align, Color, Cursor, El, Icon, Key, Link, LinkPaint, ScrollSpec, Side, Span, TextStyle,
+    Transition, col, el, row, text,
 };
 use rune_kit::Kit;
 use sidenote::core::{self, Point};
@@ -109,11 +109,7 @@ pub fn menu_surface(
 }
 
 pub fn menu_separator(p: Palette) -> El {
-    el().h(1.0)
-        .my(4.0)
-        .mx(-4.0)
-        .fill(p.line)
-        .a11y_hidden()
+    el().h(1.0).my(4.0).mx(-4.0).fill(p.line).a11y_hidden()
 }
 
 pub fn menu_row(

@@ -83,14 +83,12 @@ pub fn menu_items(s: &State, m: &Meeting, menu: El, p: Palette) -> El {
     let id = m.id.clone();
     let mut out = menu
         .child(menu_separator(p))
-        .child(
-            item("Ask model and effort").on_press(|s: &mut State| {
-                s.more_menu = None;
-                s.open_hex();
-                s.hex.section = crate::ui::hex::Section::Connect;
-                crate::ui::scene_scroll(s, "ask-agent-row");
-            }),
-        )
+        .child(item("Ask model and effort").on_press(|s: &mut State| {
+            s.more_menu = None;
+            s.open_hex();
+            s.hex.section = crate::ui::hex::Section::Connect;
+            crate::ui::scene_scroll(s, "ask-agent-row");
+        }))
         .child(item("Project").on_press({
             let id = m.id.clone();
             move |s: &mut State| {
@@ -109,11 +107,10 @@ pub fn menu_items(s: &State, m: &Meeting, menu: El, p: Palette) -> El {
         }))
         .child(group("View"))
         .child(
-            choice_item("Summary", main_tab(s, m) == Tab::Summary)
-                .on_press(|s: &mut State| {
-                    s.set_meeting_tab(Tab::Summary);
-                    s.more_menu = None;
-                }),
+            choice_item("Summary", main_tab(s, m) == Tab::Summary).on_press(|s: &mut State| {
+                s.set_meeting_tab(Tab::Summary);
+                s.more_menu = None;
+            }),
         )
         .child(
             choice_item("Your notes", main_tab(s, m) == Tab::Notes)
@@ -151,14 +148,12 @@ pub fn menu_items(s: &State, m: &Meeting, menu: El, p: Palette) -> El {
                 .on_press(move |s: &mut State| s.choose_summary_template(&id, choice)),
         );
     }
-    out = out.child(
-        item("Edit summary prompt").on_press(|s: &mut State| {
-            s.more_menu = None;
-            s.open_hex();
-            s.hex.section = crate::ui::hex::Section::PromptLibrary;
-            crate::ui::scene_scroll(s, "agent-instructions");
-        }),
-    );
+    out = out.child(item("Edit summary prompt").on_press(|s: &mut State| {
+        s.more_menu = None;
+        s.open_hex();
+        s.hex.section = crate::ui::hex::Section::PromptLibrary;
+        crate::ui::scene_scroll(s, "agent-instructions");
+    }));
     out = out.child(item("Write an email").on_press(|s: &mut State| {
         s.more_menu = None;
         s.question = TextEdit::new(

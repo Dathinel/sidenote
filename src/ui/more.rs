@@ -5,7 +5,8 @@
 //! File Explorer with the path as one argument, and an export is written into the app's
 //! `exports` folder, never into a meeting folder, so a meeting from another device is only read.
 use super::{
-    State, theme::Palette,
+    State,
+    theme::Palette,
     widgets::{menu_row, menu_separator, menu_surface, menu_trigger},
 };
 use rune::{Align, El, Side, Tx, col};
