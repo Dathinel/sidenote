@@ -2478,6 +2478,10 @@ fn deletion_cancels_delayed_ask_text_and_answers_in_all_scopes() {
         },
     );
     let memory = MemoryStore::new(state.store.root.clone());
+    let preview = memory.preview_migration().unwrap();
+    memory
+        .accept_migration(&preview.source_fingerprint)
+        .unwrap();
     const MEMORY: &str = "Synthetic saved claim";
     let mut proposal: core::memory::MemoryProposal = serde_json::from_value(serde_json::json!({
         "op":"add", "text":MEMORY, "rationale":"Synthetic source",
@@ -2496,14 +2500,10 @@ fn deletion_cancels_delayed_ask_text_and_answers_in_all_scopes() {
         state.companies.open = scope == 2;
         state.companies.selected = (scope == 2).then(|| "fixture".to_owned());
         let id = state.ask_key();
-        assert!(
-            state
-                .all_context(&Default::default())
-                .text
-                .contains(CONTEXT)
-        );
+        let context = state.all_context(&Default::default()).text;
+        assert!(context.contains(CONTEXT));
         if state.memory_open {
-            assert!(state.all_context(&Default::default()).text.contains(MEMORY));
+            assert!(context.contains(MEMORY));
         }
         for first in [
             AskProgress::Text {
