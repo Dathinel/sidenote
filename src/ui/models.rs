@@ -579,8 +579,7 @@ pub fn language_picker(s: &State, k: &Kit, p: Palette) -> El {
             "languages-row",
             "Languages you speak",
             "Choose the languages people speak in your meetings.",
-            pressable(roles::CONTROL.wrap(names, p.ink))
-                .key("languages-dropdown")
+            super::widgets::row_action(names, "languages-dropdown", p)
                 .label("Languages you speak")
                 .on_press(|s: &mut State| {
                     if !s.hex.open_language_picker() {
