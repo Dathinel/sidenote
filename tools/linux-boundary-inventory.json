@@ -393,7 +393,7 @@
 
   "src/ui/annotations/notebooks.rs": "b01a26b59d7c308ea9b6b071ff7c93afab8271d55ddfb4fe616c76411616645d",
 
-  "src/ui/annotations/workflow.rs": "8ced2a99d89386732058f5defc0a5838ec4fd0c6e5202745a1d0f6f161bb0ecd",
+  "src/ui/annotations/workflow.rs": "9a115fcd00254b85c056abebb06f4ed3ed984145a979993c243a672fdde77c04",
 
   "src/ui/area.rs": "3ae9616e2b324dc17e6837ff65fc4d6db5e61a420eae3b823de4730720a4cb55",
 
@@ -439,7 +439,7 @@
 
   "src/ui/memory/settled.rs": "9d0915dfa235083870103a6872b2fc6e23c267328989d288b2299e1e0e460b58",
 
-  "src/ui/mod.rs": "10714f5684a4222427fffb3d3ec26bef7157f823a582de8e1ae608e07bb2f278",
+  "src/ui/mod.rs": "6ef92af1dbc581787d883140fd4131555954a3cd1e205a6c9dd7ae976aef96a2",
 
   "src/ui/models.rs": "607860762e895e69abcfe1e5a3686747db62be0c179248de8651e49df0482b6d",
 

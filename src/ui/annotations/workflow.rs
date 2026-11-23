@@ -199,13 +199,12 @@ impl State {
         }
     }
     fn save_annotation_model(&mut self) {
-        let helper = self
-            .annotations
-            .options
-            .as_ref()
-            .map_or(sidenote::core::notes::Helper::Claude, |o| o.helper);
+        let Some(current) = self.annotations.options.as_ref() else {
+            self.annotations.status = "Choose an annotation agent before saving a model.".into();
+            return;
+        };
         let options = generation::Options {
-            helper,
+            helper: current.helper,
             model: self.annotations.model.text.trim().to_owned(),
         };
         match generation::save_options(&self.store.root, &options) {
@@ -1123,4 +1122,63 @@ pub(in crate::ui) fn agents_section(
         );
     }
     hex::settings::card("Annotation notes", body, p)
+}
+
+#[test]
+fn annotation_model_save_keeps_the_agent_after_reenabling() {
+    use sidenote::core::{Feature, notes::Helper, state_dir};
+
+    const ISOLATED: &str = "SIDENOTE_ANNOTATION_OPTIONS_TEST";
+    if std::env::var_os(ISOLATED).is_none() {
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "ui::annotations::workflow::annotation_model_save_keeps_the_agent_after_reenabling",
+                "--nocapture",
+            ])
+            .env(ISOLATED, "1")
+            .creation_flags(0x08000000)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+
+    crate::test_paths::isolate();
+    let root = state_dir();
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(
+        root.join("config.json"),
+        r#"{"version":1,"features":{"annotations":true},"notes":{}}"#,
+    )
+    .unwrap();
+    let mut state = State::new();
+    state.choose_annotation_agent(Helper::Codex);
+    state.annotations.model = TextEdit::new("synthetic-original-model");
+    state.save_annotation_model();
+    state.toggle_feature(Feature::Annotations);
+    drop(state);
+
+    let mut restarted = State::new();
+    assert!(!restarted.config.features.annotations);
+    assert!(restarted.annotations.options.is_none());
+    restarted.annotations.model = TextEdit::new("synthetic-unloaded-model");
+    restarted.save_annotation_model();
+    let saved = generation::load_options(&root).unwrap().unwrap();
+    assert_eq!(saved.helper, Helper::Codex);
+    assert_eq!(saved.model, "synthetic-original-model");
+
+    restarted.toggle_feature(Feature::Annotations);
+    assert!(restarted.config.features.annotations);
+    assert_eq!(restarted.annotations.model.text, "synthetic-original-model");
+    restarted.annotations.model = TextEdit::new("synthetic-replacement-model");
+    restarted.save_annotation_model();
+    let saved = generation::load_options(&root).unwrap().unwrap();
+    assert_eq!(saved.helper, Helper::Codex);
+    assert_eq!(saved.model, "synthetic-replacement-model");
 }
