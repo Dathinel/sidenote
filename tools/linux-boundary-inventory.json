@@ -193,7 +193,7 @@
   "src/sync_owner/local.rs": "c231eda3c3f1a213381c3a1a0ca25486fe16146d20773bd22578e6955afec91c",
   "src/sync_owner/mcp.rs": "0f59d5b4431ac3b617b0621351e09005116e2d09492693abc47da3fbf614e724",
   "src/ui/ai_notes.rs": "72306152b0192b277682fb9bf4821933e093668ee97b48aea02f3632d5939089",
-  "src/ui/annotations.rs": "ba2d246e8d8f95dab2ea15c7e48aae0ff7dee565eef09e2cccbc4d25c66469a6",
+  "src/ui/annotations.rs": "a9b52387f697e1909376eaf2563bab31c257add0528ce434553101211d00d875",
   "src/ui/annotations/notebooks.rs": "cf11716c9f2c3551aef0e0b8f1c01cedc75f48f23b242d7ad309b1c2daa44cd8",
   "src/ui/annotations/workflow.rs": "0721106db04998abcfeba96ed6f4e4e297de1d60f503eadbbacd36a392ff1104",
   "src/ui/area.rs": "8d8707a6b818d7e08880b92747098277e3c0d46c1badfa0dd27493047d16aad4",
