@@ -967,3 +967,25 @@ pub fn meetings_home(s: &State) -> bool {
         && !s.on_live()
         && !matches!(s.filter, Filter::Area(_) | Filter::Areas)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn home_sidebar_has_the_approved_dimensions_and_place_order() {
+        crate::test_paths::isolate();
+        let mut s = State::new();
+        s.config.features.tasks = true;
+        s.config.features.memory = true;
+        s.config.features.daily_check = true;
+
+        let (places, _) = places(&s, super::super::theme::palette(true));
+        let names: Vec<_> = places.iter().map(|place| place.name).collect();
+        let expected = "Meetings, Tasks, People, Memory, Diary, Annotations";
+        assert_eq!(
+            (MAIN_H, WIDE, names.join(", ").as_str()),
+            (32.0, 240.0, expected)
+        );
+    }
+}
