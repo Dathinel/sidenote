@@ -62,8 +62,6 @@ def verify(root, overrides=None):
             text = source(name)
             fingerprint = boundary_fingerprint(text)
             if fingerprint is not None:
-                if name in expected and not expected[name].startswith("calls:"):
-                    fingerprint = hashlib.sha256(text.encode()).hexdigest()
                 actual[name] = fingerprint
     if actual != expected:
         stale = sorted(name for name in actual.keys() | expected.keys() if actual.get(name) != expected.get(name))

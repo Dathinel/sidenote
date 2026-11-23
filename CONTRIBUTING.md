@@ -128,7 +128,6 @@ try { bun install --frozen-lockfile } finally { Pop-Location }
 that matches the spawn or file-read patterns in `tools/linux-boundary-inventory.json`.
 A `calls:` fingerprint hashes the match count and the sorted matching source lines
 after trimming whitespace at their edges. Edits to other lines leave it unchanged.
-During migration, existing untagged entries still use whole-file SHA-256 digests.
 When the inventory is stale, list the process and file-read calls you added, removed,
 or changed in your pull request. A maintainer reviews them and writes every new or
 updated entry in the `calls:` format.
