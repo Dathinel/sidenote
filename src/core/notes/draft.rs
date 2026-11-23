@@ -19,6 +19,7 @@ fn path(root: &Path, id: &str) -> PathBuf {
 pub fn discard_final(root: &Path, folder: &Path, id: &str) {
     if super::queue::valid_id(id)
         && !core::paths::read_only()
+        && let Ok(Some(_claim)) = core::meeting_delete::claim_write(root, id)
         && folder.join("english-summary.json").is_file()
     {
         let _ = fs::remove_file(path(root, id));
@@ -46,29 +47,34 @@ pub fn start(root: PathBuf, meetings: PathBuf, id: String, settings: NotesSettin
     if !super::queue::valid_id(&id) {
         return;
     }
-    std::thread::spawn(move || {
-        let started = Instant::now();
-        let mut run = DraftCli { root: root.clone() };
-        let result = generate(&root, &meetings, &id, &settings, &mut run);
-        let outcome = match result {
-            Ok(Outcome::Skipped) => "skipped",
-            Ok(Outcome::Written) => "written",
-            Ok(Outcome::NoHelper) => "skipped helper unavailable",
-            Err(_) => "skipped helper or local data unavailable",
-        };
-        let _ = store_io::write(
-            &root.join("local/draft-outcomes").join(format!("{id}.json")),
-            &if outcome == "written" {
-                "written"
-            } else {
-                "deferred"
-            },
-        );
-        crate::listener::log(&format!(
-            "draft {id} duration={:.1}s {outcome}",
-            started.elapsed().as_secs_f64()
-        ));
-    });
+    std::thread::spawn(move || run_claimed(root, meetings, id, settings));
+}
+
+fn run_claimed(root: PathBuf, meetings: PathBuf, id: String, settings: NotesSettings) {
+    let Ok(Some(_claim)) = core::meeting_delete::claim_write(&root, &id) else {
+        return;
+    };
+    let started = Instant::now();
+    let mut run = DraftCli { root: root.clone() };
+    let result = generate(&root, &meetings, &id, &settings, &mut run);
+    let outcome = match result {
+        Ok(Outcome::Skipped) => "skipped",
+        Ok(Outcome::Written) => "written",
+        Ok(Outcome::NoHelper) => "skipped helper unavailable",
+        Err(_) => "skipped helper or local data unavailable",
+    };
+    let _ = store_io::write(
+        &root.join("local/draft-outcomes").join(format!("{id}.json")),
+        &if outcome == "written" {
+            "written"
+        } else {
+            "deferred"
+        },
+    );
+    crate::listener::log(&format!(
+        "draft {id} duration={:.1}s {outcome}",
+        started.elapsed().as_secs_f64()
+    ));
 }
 
 struct DraftCli {
@@ -228,4 +234,42 @@ pub(super) fn generate(
     store_io::write(&path(root, id), &summary)?;
     let _ = read(root, &folder, id)?;
     Ok(Outcome::Written)
+}
+
+#[cfg(test)]
+mod recycle_tests {
+    use super::*;
+    use crate::core::meeting_delete::{Eligibility, Storage};
+
+    #[test]
+    fn recycled_draft_does_not_publish_an_outcome() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("meetings");
+        let root = temp.path().join("state");
+        let meeting = source.join("100-1");
+        fs::create_dir_all(&meeting).unwrap();
+        fs::create_dir_all(root.join("local/draft-outcomes")).unwrap();
+        fs::write(meeting.join("manifest.json"), b"{}").unwrap();
+        let outcome = root.join("local/draft-outcomes/100-1.json");
+        fs::write(&outcome, b"original").unwrap();
+        let storage = Storage::new(&source, &root).unwrap();
+        let id = storage
+            .delete(
+                "100-1",
+                "Synthetic".into(),
+                1,
+                |_| Ok(Eligibility::Ready),
+                |_| Ok(()),
+            )
+            .unwrap();
+        run_claimed(
+            root.clone(),
+            source,
+            "100-1".into(),
+            NotesSettings::default(),
+        );
+        assert!(!outcome.exists());
+        storage.restore(&id).unwrap();
+        assert_eq!(fs::read(outcome).unwrap(), b"original");
+    }
 }

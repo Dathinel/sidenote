@@ -2442,3 +2442,179 @@ fn a_joined_meeting_shows_its_own_summarys_word() {
         stamped_summary(&joined, Some(english));
     }));
 }
+
+#[test]
+fn deletion_cancels_delayed_ask_text_and_answers_in_all_scopes() {
+    if in_parent("deletion_cancels_delayed_ask_text_and_answers_in_all_scopes") {
+        return;
+    }
+    use sidenote::core::{
+        meeting_delete::{
+            DeleteError, Eligibility, MoveEvent, Phase, Storage, WriteStage, read_visibility,
+            suppressed_ids,
+        },
+        memory::MemoryStore,
+    };
+
+    let mut rt = page_with(DEFAULT_SIZE, || {
+        let root = core::state_dir();
+        let mut prefs = core::UiPrefs::default();
+        core::people::initialize(&mut prefs, &[]);
+        prefs.save(&root).unwrap();
+        let manifest =
+            serde_json::json!({"status":"complete","created_at_ms":prefs.people_since_ms});
+        let folder = core::meetings_dir().join(MEETING);
+        std::fs::write(folder.join("manifest.json"), manifest.to_string()).unwrap();
+        core::companies::Companies::save_company(
+            &root,
+            core::companies::Company {
+                id: "fixture".into(),
+                name: "Synthetic company".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        core::companies::Companies::link(&root, "Synthetic Person", Some("fixture".into()), None)
+            .unwrap();
+    });
+    let state = &mut rt.state;
+    let store = Storage::new(&core::meetings_dir(), &state.store.root).unwrap();
+    state.meetings[0].summary.people = vec!["Synthetic Person".into()];
+    let memory = MemoryStore::new(state.store.root.clone());
+    let preview = memory.preview_migration().unwrap();
+    memory
+        .accept_migration(&preview.source_fingerprint)
+        .unwrap();
+    const MEMORY: &str = "Synthetic saved claim";
+    let mut proposal: core::memory::MemoryProposal = serde_json::from_value(serde_json::json!({
+        "op":"add", "text":MEMORY, "rationale":"Synthetic source",
+        "sources":[{"type":"meeting", "reference":format!("[[{MEETING}@00:01]]")}]
+    }))
+    .unwrap();
+    proposal.id = core::memory::proposal_id(&proposal);
+    memory
+        .stage_proposals(std::slice::from_ref(&proposal))
+        .unwrap();
+    memory.accept_proposal(&proposal.id).unwrap();
+    state.memory.records = memory.load().unwrap().records;
+    for scope in 0..3 {
+        state.memory_open = scope == 1;
+        state.selected = (scope == 0).then(|| MEETING.to_owned());
+        state.companies.open = scope == 2;
+        state.companies.selected = (scope == 2).then(|| "fixture".to_owned());
+        let id = state.ask_key();
+        let context = state.all_context(&Default::default()).text;
+        assert!(context.contains(CONTEXT), "scope {scope}");
+        if state.memory_open {
+            assert!(context.contains(MEMORY));
+        }
+        for first in [
+            AskProgress::Text {
+                text: "Late text".into(),
+            },
+            AskProgress::Finished,
+        ] {
+            let mut run = AskRun::stand_in("fixture", &[], 0);
+            run.live = true;
+            run.visibility = *read_visibility();
+            let cancel = run.cancel.clone();
+            let (tx, rx) = mpsc::channel();
+            tx.send(Ok("Late answer".into())).unwrap();
+            run.rx = rx;
+            state.asks.insert(id.clone(), run);
+
+            let fail_after_publish = matches!(&first, AskProgress::Finished);
+            let prior = core::mutation_generation();
+            let result = store.delete(
+                MEETING,
+                "Synthetic".into(),
+                1,
+                |_| Ok(Eligibility::Ready),
+                |event| {
+                    if fail_after_publish && event == MoveEvent::Suppression(WriteStage::Published)
+                    {
+                        Err(std::io::Error::other("post-publication failure"))
+                    } else {
+                        Ok(())
+                    }
+                },
+            );
+            let receipt = match result {
+                Ok(id) if !fail_after_publish => id,
+                Err(DeleteError::Partial {
+                    transaction,
+                    source,
+                }) if fail_after_publish => {
+                    assert_eq!(source.to_string(), "post-publication failure");
+                    transaction
+                }
+                _ => panic!("unexpected deletion result"),
+            };
+            assert_ne!(core::mutation_generation(), prior);
+            let progress = |event| Event::Progress {
+                id: id.clone(),
+                generation: 0,
+                event,
+            };
+            state.apply_event(progress(first));
+            assert!(cancel.stopped());
+            assert!(!state.asks.contains_key(&id));
+            state.apply_event(progress(AskProgress::Finished));
+            assert!(state.store.load(&id).unwrap().messages.is_empty());
+            let suppressed = suppressed_ids(&state.store.root).unwrap();
+            assert!(suppressed.contains(MEETING));
+            let context = state.all_context(&suppressed).text;
+            assert!(!context.contains(CONTEXT));
+            assert!(!context.contains(MEMORY));
+            assert_eq!(memory.load().unwrap().records.len(), 1);
+            assert_eq!(store.recover(&receipt).unwrap(), Phase::Deleted);
+            store.restore(&receipt).unwrap();
+            if state.memory_open {
+                let visible = suppressed_ids(&state.store.root).unwrap();
+                assert!(state.all_context(&visible).text.contains(MEMORY));
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn suppression_failure_during_ui_apply_retries_unchanged_catalog() {
+    if in_parent("suppression_failure_during_ui_apply_retries_unchanged_catalog") {
+        return;
+    }
+    use std::{os::windows::fs::OpenOptionsExt, sync::atomic::Ordering};
+
+    let mut rt = page();
+    let state = &mut rt.state;
+    let path = state.store.root.join("local/deleted-meeting-ids.json");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, b"{}").unwrap();
+    state.config.features.memory = false;
+    state.config.features.daily_check = false;
+    let options = state.refresh_options();
+    let snapshot = || {
+        Event::Refreshed(refresh::Result {
+            generation: core::mutation_generation(),
+            options,
+            data: Some(Box::new(refresh::Data::read(options))),
+        })
+    };
+    let (handle, dirty) = refresh::observing_handle();
+    state.scan_tx = Some(handle);
+    let ready = snapshot();
+    let before = refresh::metadata();
+    let held = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .share_mode(0)
+        .open(&path)
+        .unwrap();
+    state.apply_event(ready);
+    assert!(state.meetings.is_empty());
+    assert!(dirty.load(Ordering::Acquire));
+    drop(held);
+    assert!(before == refresh::metadata());
+    state.apply_event(snapshot());
+    assert_eq!(state.meetings[0].id, MEETING);
+}
