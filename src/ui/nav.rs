@@ -9,7 +9,7 @@ use super::{
     State, hex, icons, roles,
     tasks::View,
     theme::Palette,
-    widgets::{dot, pressable},
+    widgets::{dot, menu_row, menu_separator, menu_surface, menu_trigger, pressable},
 };
 use chrono::{DateTime, Local};
 use rune::{Color, El, col, el, row};
@@ -749,8 +749,6 @@ fn logo() -> El {
     );
     mark
 }
-const MENU_ROW_H: f32 = 40.0;
-const MENU_PAD: f32 = 10.0;
 
 fn profile_avatar(name: &str, p: Palette, size: f32) -> El {
     let initial = name
@@ -819,12 +817,16 @@ fn profile(s: &State, p: Palette, wide: bool, layer: &mut Vec<El>) -> El {
                 p.faint,
             ));
     }
-    let trigger = pressable(trigger)
-        .key("profile-button")
-        .label("Profile and settings")
-        .radius(7.0)
-        .hover(p.chip)
-        .on_press(|s: &mut State| s.nav.profile_menu = !s.nav.profile_menu);
+    let trigger = menu_trigger(
+        pressable(trigger)
+            .key("profile-button")
+            .label("Profile and settings")
+            .radius(7.0)
+            .hover(p.chip),
+        s.nav.profile_menu,
+        p,
+        |s| s.nav.profile_menu = !s.nav.profile_menu,
+    );
     let sync = s.last_updated.map(|at| {
         let minutes = at.elapsed().as_secs() / 60;
         if minutes == 0 {
@@ -842,39 +844,26 @@ fn profile(s: &State, p: Palette, wide: bool, layer: &mut Vec<El>) -> El {
                 .unwrap_or_default()
         );
         let mut menu = col()
-            .key("profile-menu-menu")
-            .role("menu")
-            .label("Profile menu")
-            .focus_group()
-            .w(228.0)
-            .padding(6.0)
-            .gap(2.0)
-            .fill(p.card)
-            .border(1.0, p.line)
-            .radius(8.0)
-            .shadow(4.0, 16.0, p.shadow)
             .child(
                 row()
-                    .h(MENU_ROW_H)
-                    .px(MENU_PAD)
+                    .h(40.0)
+                    .px(8.0)
                     .gap(10.0)
                     .items_center()
-                    .child(avatar(28.0, 7.0))
+                    .child(avatar(24.0, SIGNAL_D))
                     .child(
-                        roles::NAME
-                            .line(name, p.ink)
-                            .key("profile-menu-name")
-                            .grow(1.0),
+                        col()
+                            .grow(1.0)
+                            .shrink()
+                            .child(roles::NAV.line(name, p.ink).key("profile-menu-name"))
+                            .child(
+                                roles::META
+                                    .line(device_line, p.faint)
+                                    .key("profile-menu-device"),
+                            ),
                     ),
             )
-            .child(
-                roles::SMALL
-                    .wrap(device_line, p.soft)
-                    .max_lines(2)
-                    .key("profile-menu-device")
-                    .px(MENU_PAD)
-                    .pb(8.0),
-            );
+            .child(menu_separator(p));
         if update_ready {
             menu = menu.child(profile_item(
                 "Update ready",
@@ -904,7 +893,7 @@ fn profile(s: &State, p: Palette, wide: bool, layer: &mut Vec<El>) -> El {
                 },
             ));
         }
-        menu = menu
+        let menu = menu
             .child(profile_item(
                 "Prompt library",
                 "profile-menu-item2",
@@ -928,26 +917,29 @@ fn profile(s: &State, p: Palette, wide: bool, layer: &mut Vec<El>) -> El {
                     s.hex.section = super::hex::Section::Shortcuts;
                 },
             ))
+            .child(menu_separator(p))
             .child(
-                profile_item(
-                    "Settings",
-                    "profile-menu-item4",
-                    &super::icons::SETTINGS,
-                    p,
-                    |s| {
+                menu_row("Settings", p, None, Some(&icons::SETTINGS), Some("Ctrl+,"))
+                    .key("profile-menu-item4")
+                    .help("Settings")
+                    .on_press(|s: &mut State| {
                         s.nav.profile_menu = false;
                         s.open_hex();
-                    },
-                )
-                .child(roles::META.line("Ctrl+,", p.soft)),
+                    }),
             );
-        layer.push(rune_kit::scrim("profile-menu-scrim", |s: &mut State| {
-            s.nav.profile_menu = false
-        }));
-        layer.push(
-            menu.anchored_fit("profile-button", rune::Side::Top, rune::Align::Start, 6.0)
-                .focus_return("profile-button")
-                .modal(true, |s: &mut State| s.nav.profile_menu = false),
+        menu_surface(
+            &super::theme::kit(&p),
+            p,
+            layer,
+            menu,
+            (
+                "profile-menu",
+                "profile-button",
+                rune::Side::Top,
+                rune::Align::Start,
+                WIDE - 2.0 * PAD,
+            ),
+            |s| s.nav.profile_menu = false,
         );
     }
     trigger
@@ -960,24 +952,10 @@ fn profile_item(
     p: Palette,
     action: impl Fn(&mut State) + 'static,
 ) -> El {
-    pressable(
-        row()
-            .w_full()
-            .h(MENU_ROW_H)
-            .px(MENU_PAD)
-            .gap(10.0)
-            .items_center()
-            .child(super::icons::draw(icon, 18.0, p.soft))
-            .child(roles::NAV.line(name, p.soft).grow(1.0)),
-    )
-    .key(key.to_string())
-    .role("menuitem")
-    .label(name.to_string())
-    .help(name.to_string())
-    .radius(6.0)
-    .hover(p.chip)
-    .focus_ring(1.0, 0.0, p.soft)
-    .on_press(action)
+    menu_row(name, p, None, Some(icon), None)
+        .key(key)
+        .help(name)
+        .on_press(action)
 }
 
 pub fn meetings_home(s: &State) -> bool {
@@ -990,6 +968,32 @@ pub fn meetings_home(s: &State) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn profile_menu_accepts_enter_arrows_and_escape() {
+        use rune::Key::{Down, Enter, Escape, Tab, Up};
+        use rune::{Env, Runtime};
+        crate::test_paths::isolate();
+        let view = |s: &State, _: &mut rune::Cx<State>| {
+            let mut layer = Vec::new();
+            let trigger = profile(s, super::super::theme::palette(true), true, &mut layer);
+            col().child(trigger).children(layer)
+        };
+        let mut rt = Runtime::new(State::new(), view, (400.0, 600.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+        let keys = [Tab, Enter, Down, Down, Up, Escape];
+        let [trigger, opened, first, next, back, closed] = keys.map(|key| {
+            rt.key(key.into());
+            rt.frame(0.016);
+            rt.elements().into_iter().find(|e| e.focused).unwrap()
+        });
+        assert_eq!(trigger.key.as_deref(), Some("profile-button"));
+        assert_eq!(opened.role, "menuitem");
+        assert_ne!(first.key, next.key);
+        assert_eq!(first.key, back.key);
+        assert_eq!(closed.key, trigger.key);
+        assert!(!rt.state.nav.profile_menu);
+    }
 
     #[test]
     fn home_sidebar_has_the_approved_dimensions_and_place_order() {

@@ -204,25 +204,36 @@ pub fn panel(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> Option<El> 
     let busy = s.project_merge.pending.is_some();
     let start = name.clone();
     let menu_start = name.clone();
-    let mut menu = Menu::new("project-actions")
-        .trigger(
-            button("Project menu", "project-actions", p)
-                .button_disabled(busy)
-                .on_press(|s: &mut State| {
-                    if s.project_merge.pending.is_none() {
-                        s.project_merge.menu = !s.project_merge.menu;
-                    }
-                }),
-        )
-        .open(s.project_merge.menu && !busy)
-        .placement(Placement::BottomStart);
-    if s.project_merge.menu && !busy {
-        menu = menu
-            .on_close(|s: &mut State| s.project_merge.menu = false)
-            .item(
-                MenuItem::new("Merge into...")
-                    .on_select(move |s: &mut State| s.start_project_merge(&menu_start)),
-            );
+    let open = s.project_merge.menu && !busy;
+    let trigger = super::widgets::menu_trigger(
+        button("Project menu", "project-actions", p).button_disabled(busy),
+        open,
+        p,
+        |s| {
+            if s.project_merge.pending.is_none() {
+                s.project_merge.menu = !s.project_merge.menu;
+            }
+        },
+    );
+    if open {
+        let items = col().child(
+            super::widgets::menu_row("Merge into...", p, None, None, None)
+                .on_press(move |s: &mut State| s.start_project_merge(&menu_start)),
+        );
+        super::widgets::menu_surface(
+            k,
+            p,
+            layer,
+            items,
+            (
+                "project-actions",
+                "project-actions",
+                rune::Side::Bottom,
+                rune::Align::Start,
+                240.0,
+            ),
+            |s| s.project_merge.menu = false,
+        );
     }
     let mut content = col().w_full().gap(10.0).mb(16.0).child(
         row()
@@ -232,7 +243,7 @@ pub fn panel(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> Option<El> 
                     .button_disabled(busy)
                     .on_press(move |s: &mut State| s.start_project_merge(&start)),
             )
-            .child(menu.build(k, layer)),
+            .child(trigger),
     );
     for (from, merge) in &s.tasks.projects.merges {
         if !merge.active || s.tasks.projects.resolve(from) != *name {
