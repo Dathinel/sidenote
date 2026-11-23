@@ -615,13 +615,20 @@ mod tests {
         }
     }
 
-    fn apply_recycle_event(rt: &mut Runtime<State>, event: Event) {
-        rt.update(|s, tx| {
-            s.apply_event(event);
-            assert!(s.apply_recycle_result(tx));
-        });
+    fn poll_recycle_event(rt: &mut Runtime<State>, event: Event) {
+        assert!(rt.state.events_tx.send(event).is_ok());
+        rt.poll = Some(crate::ui::poll);
         rt.settle_all();
         rt.frame(0.0);
+        rt.poll = None;
+    }
+
+    fn apply_recycle_event(rt: &mut Runtime<State>, event: Event) {
+        poll_recycle_event(rt, event);
+        assert!(
+            rt.state.delete_ui.pending.is_none(),
+            "the app poll must apply a completed recycle operation"
+        );
     }
 
     fn wait_recycle(rt: &mut Runtime<State>) {
@@ -953,6 +960,15 @@ mod tests {
         release.send(()).unwrap();
         let completed = next_recycle_event(&mut rt.state);
         hex.join().unwrap();
+        let Event::MeetingRecycle {
+            generation: first_generation,
+            result: RecycleResult::Deleted(first_transaction),
+        } = &completed
+        else {
+            panic!("first worker did not report a deletion");
+        };
+        assert_eq!(*first_generation, generation);
+        let first_transaction = first_transaction.clone();
 
         let options = rt.state.refresh_options();
         rt.state.apply_event(Event::Refreshed(refresh::Result {
@@ -966,14 +982,7 @@ mod tests {
         );
         apply_recycle_event(&mut rt, completed);
 
-        let first_transaction = rt.state.delete_ui.undo.clone().unwrap();
-        rt.update(|s, tx| {
-            s.apply_event(Event::MeetingRecycle {
-                generation,
-                result: RecycleResult::Deleted("duplicate".into()),
-            });
-            assert!(!s.apply_recycle_result(tx));
-        });
+        assert!(rt.find("delete-undo").is_some());
         assert_eq!(
             rt.state.delete_ui.undo.as_deref(),
             Some(first_transaction.as_str())
@@ -981,10 +990,49 @@ mod tests {
 
         tap(&mut rt, &format!("more-row-{second}-button"));
         tap(&mut rt, "delete-meeting");
-        let hex = hex_status("idle", &second);
-        tap(&mut rt, "delete-confirm");
-        wait_recycle(&mut rt);
+        let (release, held) = std::sync::mpsc::channel();
+        let hex = hex_status_with("idle", &second, move || {
+            held.recv_timeout(Duration::from_millis(500)).unwrap();
+        });
+        rt.update(|s, _| s.confirm_delete());
+        let newer_generation = rt.state.delete_ui.generation;
+        assert_ne!(newer_generation, generation);
+
+        poll_recycle_event(
+            &mut rt,
+            Event::MeetingRecycle {
+                generation,
+                result: RecycleResult::Deleted(first_transaction.clone()),
+            },
+        );
+        let pending = rt
+            .state
+            .delete_ui
+            .pending
+            .as_ref()
+            .expect("the old result must leave the newer operation pending");
+        assert!(pending.result.is_none());
+        assert_eq!(rt.state.delete_ui.generation, newer_generation);
+        assert_eq!(
+            rt.state.delete_ui.undo.as_deref(),
+            Some(first_transaction.as_str())
+        );
+        assert!(rt.state.meetings.iter().any(|meeting| meeting.id == second));
+
+        release.send(()).unwrap();
+        let completed = next_recycle_event(&mut rt.state);
         hex.join().unwrap();
+        let Event::MeetingRecycle {
+            generation: second_generation,
+            result: RecycleResult::Deleted(second_transaction),
+        } = &completed
+        else {
+            panic!("second worker did not report a deletion");
+        };
+        assert_eq!(*second_generation, newer_generation);
+        let second_transaction = second_transaction.clone();
+        apply_recycle_event(&mut rt, completed);
+        assert!(rt.state.meetings.is_empty());
         assert_eq!(
             storage(&rt.state.store.root)
                 .unwrap()
@@ -993,9 +1041,10 @@ mod tests {
                 .len(),
             2
         );
-        assert_ne!(
+        assert_ne!(second_transaction, first_transaction);
+        assert_eq!(
             rt.state.delete_ui.undo.as_deref(),
-            Some(first_transaction.as_str())
+            Some(second_transaction.as_str())
         );
         tap(&mut rt, "delete-undo");
         wait_recycle(&mut rt);
@@ -1006,12 +1055,31 @@ mod tests {
                 .contains(&first)
         );
 
-        rt.update(|s, _| s.go_home());
-        rt.frame(0.0);
+        let store = storage(&rt.state.store.root).unwrap();
+        assert_eq!(
+            store.receipt(&first_transaction).unwrap().phase,
+            Phase::Deleted
+        );
+        assert_eq!(
+            store.receipt(&second_transaction).unwrap().phase,
+            Phase::Restored
+        );
+        tap(&mut rt, "meeting-breadcrumb-parent");
+        assert!(rt.state.selected.is_none());
         tap(&mut rt, OPEN_DELETED);
+        let Some(Dialog::Deleted(rows)) = &rt.state.delete_ui.dialog else {
+            panic!("the Deleted meetings button must open the list");
+        };
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].0, first_transaction);
         tap(&mut rt, &format!("restore-{first_transaction}"));
         wait_recycle(&mut rt);
         assert_eq!(rt.state.current().unwrap().id, first);
+        assert!(
+            rt.elements()
+                .iter()
+                .any(|e| e.text.as_deref() == Some("Meeting restored"))
+        );
         assert_eq!(rt.state.meetings.len(), 2);
     }
 
