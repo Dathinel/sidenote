@@ -1,8 +1,6 @@
 use rune::{Align, Color, Cx, El, Icon, Span, col, el, row};
-use rune_motion::{
-    Spring, Transition,
-    tokens::{SETTLE, pair},
-};
+use rune_motion::tokens::{SETTLE, pair};
+use rune_motion::{Spring, Transition};
 use sidenote::core::Urgency;
 use std::{rc::Rc, time::Duration};
 
@@ -23,7 +21,6 @@ pub(super) enum Density {
     Rail,
     List,
 }
-
 impl Density {
     fn wide(self, width: f32) -> bool {
         matches!(self, Self::List) && width >= 720.0
@@ -56,7 +53,6 @@ pub(super) struct Row<'a> {
     pub interactive: bool,
     pub save: Save<'a>,
 }
-
 pub(super) struct Task<'a> {
     pub row: Row<'a>,
     pub description: Option<&'a str>,
@@ -122,7 +118,6 @@ fn tick(task: &Task<'_>, mark: El, narrow: bool, p: Palette) -> El {
 }
 
 type Meta<'a> = (&'a str, Color, f32);
-
 fn meta<'a>(p: Palette, parts: impl IntoIterator<Item = Meta<'a>>) -> El {
     let (mut text, mut spans) = (String::new(), Vec::new());
     for (label, ink, weight) in parts {
@@ -177,18 +172,24 @@ pub(super) fn task_row(t: Task<'_>, density: Density, width: f32, reduced: bool,
     if !reduced {
         icon = icon.transition(Transition::blur_replace().springs(pair::SNAP));
     }
-    let shell = shell(&t.row, wide, p).child(tick(&t, icon, narrow, p));
+    let mut shell = shell(&t.row, wide, p).child(tick(&t, icon, narrow, p));
+    if let Some(toggle) = t.toggle {
+        shell = shell.on_key(move |s: &mut State, event, _| {
+            if matches!(&event.key, rune::Key::Text(key) if key == " ") {
+                toggle(s);
+                return true;
+            }
+            false
+        });
+    }
     let color = if done { p.faint } else { p.ink };
     let role = if done { roles::SMALL } else { roles::NAME };
     let mut name = title(t.row.title, role, color, if narrow { 3 } else { 2 });
     if done {
         name = name.strike(0, t.row.title.len(), None);
     }
-    let spring = if reduced {
-        Spring::new(0.18, 0.0)
-    } else {
-        SETTLE
-    };
+    let fade = Spring::new(0.18, 0.0);
+    let spring = if reduced { fade } else { SETTLE };
     let body = copy().child(name.motion(spring));
     let owner_ink = t.owner.filter(|_| !done).map_or(p.faint, |_| p.soft);
     let owner = (t.owner.unwrap_or("No owner"), owner_ink, 400.0);
