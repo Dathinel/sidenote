@@ -37,6 +37,8 @@ pub struct UiPrefs {
     pub tasks_done: super::DoneFilter,
     /// List or board, remembered for this PC only.
     pub tasks_layout: TasksLayout,
+    /// Capture view index: 0 for Blocks, 1 for Filmstrip.
+    pub annotations_view: usize,
     pub task_titles_notice_seen: bool,
     /// None until the owner folds or opens the sidebar once.
     pub sidebar_collapsed: Option<bool>,
@@ -68,6 +70,7 @@ impl Default for UiPrefs {
             tasks_include_unassigned: false,
             tasks_done: Default::default(),
             tasks_layout: Default::default(),
+            annotations_view: 0,
             task_titles_notice_seen: false,
             sidebar_collapsed: None,
             settings_tabs: Default::default(),
