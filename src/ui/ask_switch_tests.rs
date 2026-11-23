@@ -485,7 +485,7 @@ fn meeting_model_hint_reveals_on_hover_and_keyboard_focus() {
         s.ask_open = true;
     });
     rt.frame(0.0);
-    let hint = "help-hint-model";
+    let hint = "ask-model";
     let tip = "help-hint-model-tip";
     assert_eq!(rt.presented(tip).unwrap().1, 0.0);
     let (x, y) = rt.find(hint).unwrap();
@@ -1236,6 +1236,114 @@ fn finish_answer(rt: &mut Runtime<State>) {
             .expect("no answer");
         rt.update(|s, _| s.apply_event(event));
     }
+}
+
+#[test]
+fn tab_from_the_ask_editor_focuses_the_model_picker() {
+    if in_parent("tab_from_the_ask_editor_focuses_the_model_picker") {
+        return;
+    }
+    let mut rt = page();
+    rt.set_full_keyboard_access(false);
+    rt.update(|s, tx| {
+        scene_agents(s, ALL_AGENTS);
+        s.ask_open = true;
+        tx.focus("ask-input", true);
+    });
+    rt.frame(0.0);
+    assert!(rt.state.question.focused);
+
+    rt.key(KeyEvent {
+        key: Key::Tab,
+        mods: rune::Mods::default(),
+    });
+    rt.frame(0.0);
+    assert!(!rt.state.question.focused);
+    rt.update_if(|s, tx| poll(s, 0.0, tx));
+    rt.frame(0.0);
+    rt.update_if(|s, tx| {
+        assert_eq!(tx.focused(), Some("ask-model"));
+        assert!(s.ask_open);
+        false
+    });
+}
+
+#[test]
+fn reduced_motion_opens_the_ask_panel_without_moving_the_pill() {
+    if in_parent("reduced_motion_opens_the_ask_panel_without_moving_the_pill") {
+        return;
+    }
+    let mut state = State::new();
+    scene_agents(&mut state, ALL_AGENTS);
+    let mut rt = Runtime::with_text(
+        state,
+        |s, cx| {
+            cx.reduced_motion(true);
+            view(s, cx)
+        },
+        DEFAULT_SIZE,
+        Env::default(),
+        TextSystem::new(theme::fonts(), (theme::SANS, "Inter")),
+    );
+    rt.frame(0.0);
+    rt.settle_all();
+    rt.frame(0.0);
+    let closed = rect_of(&rt, "ask-panel");
+    let pill = rect_of(&rt, "ask-pill");
+    rt.update(|_, tx| tx.focus("ask-input", true));
+    rt.frame(0.0);
+    rt.update(|s, tx| s.ask_open = ask::focus_open(s, tx));
+    rt.frame(0.016);
+    let opened = rect_of(&rt, "ask-panel");
+    assert_eq!(opened[1], closed[1] - 40.0);
+    assert_eq!(opened[3], closed[3] + 40.0);
+    assert_eq!(rect_of(&rt, "ask-pill"), pill);
+}
+
+#[cfg(debug_assertions)]
+#[test]
+fn ask_pressing_send_and_a_suggestion_keeps_the_editor_focused() {
+    if in_parent("ask_pressing_send_and_a_suggestion_keeps_the_editor_focused") {
+        return;
+    }
+    *core::ask_session::STAND_IN.lock().unwrap() = Some(fake_helper);
+    GATE.store(true, SeqCst);
+    let mut rt = page();
+    rt.update(|s, tx| {
+        scene_agents(s, ALL_AGENTS);
+        s.ask_open = true;
+        tx.focus("ask-input", true);
+    });
+    rt.frame(0.0);
+    assert!(rt.state.question.focused);
+    rt.key(KeyEvent {
+        key: Key::Text("Summarize the plan".into()),
+        mods: rune::Mods::default(),
+    });
+    rt.frame(0.2);
+    tap(&mut rt, "ask-send");
+    assert!(rt.state.asks.contains_key(MEETING));
+    assert!(rt.state.question.focused, "Send kept the editor's focus");
+    rt.key(KeyEvent {
+        key: Key::Text("x".into()),
+        mods: rune::Mods::default(),
+    });
+    rt.frame(0.0);
+    assert_eq!(
+        rt.state.question.text, "x",
+        "the editor still receives keys"
+    );
+    finish_answer(&mut rt);
+    rt.update(|s, _| s.question.text.clear());
+    rt.update(|s, _| s.thread_hidden = true);
+    rt.frame(0.2);
+    tap(&mut rt, "suggest-0");
+    assert!(rt.state.asks.contains_key(MEETING));
+    assert!(
+        rt.state.question.focused,
+        "The suggestion kept the editor's focus"
+    );
+    finish_answer(&mut rt);
 }
 
 #[cfg(debug_assertions)]
