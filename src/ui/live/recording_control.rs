@@ -48,11 +48,12 @@ pub(in crate::ui) fn parts_control(s: &State, k: &Kit, p: Palette, layer: &mut V
     };
     let transcript = pressable(
         row()
-            .gap(4.0)
+            .gap(2.0)
             .items_center()
+            .justify_center()
             .child(super::super::icons::draw(
                 &super::super::icons::AUDIO_LINES,
-                18.0,
+                16.0,
                 p.soft,
             ))
             .child(super::super::icons::draw(
@@ -61,15 +62,14 @@ pub(in crate::ui) fn parts_control(s: &State, k: &Kit, p: Palette, layer: &mut V
                 } else {
                     &super::super::icons::CHEVRON_UP
                 },
-                12.0,
+                14.0,
                 p.soft,
             )),
     )
     .key("meeting-transcript")
     .label(label)
-    .px(10.0)
-    .h(32.0)
-    .radius(16.0)
+    .size(52.0, 40.0)
+    .radius(20.0)
     .hover(p.chip)
     .on_hover_change(|s: &mut State, hovered, _| s.meeting_ui.recording_hover = hovered)
     .on_press(|s: &mut State| {
@@ -93,9 +93,12 @@ pub(in crate::ui) fn parts_control(s: &State, k: &Kit, p: Palette, layer: &mut V
         .key("meeting-recording-control")
         .items_center()
         .padding(2.0)
-        .radius(20.0)
+        .h(44.0)
+        .min_w(56.0)
+        .radius(22.0)
         .fill(if recording { p.chip } else { p.card })
         .border(1.0, p.line)
+        .shadow(3.0, 16.0, p.shadow)
         .child(transcript);
     if recording {
         // Two bars distinguish Pause here from Stop on other pages.
