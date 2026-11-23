@@ -31,7 +31,7 @@ pub mod recording_source;
 pub mod relay_preview;
 #[cfg(windows)]
 pub mod speech_host;
-pub use config::{Config, Feature, Features};
+pub use config::{Capability, Config, Feature, Features};
 pub mod check_v2;
 pub mod daily_check;
 pub mod diary;

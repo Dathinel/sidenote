@@ -157,7 +157,9 @@ fn config_folder_and_existing_entry_detection() {
         );
     }
 }
+#[cfg(feature = "nightly")]
 const ORIGINAL: &[u8] = br#"{"keep":1,"mcpServers":{}}"#;
+#[cfg(feature = "nightly")]
 fn prepared(sandbox: &Sandbox, client: Client) -> Agent {
     let agent = sandbox.agent(client);
     fs::create_dir_all(agent.path.parent().unwrap()).unwrap();
