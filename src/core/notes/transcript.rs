@@ -304,6 +304,29 @@ garbage
         assert!(rendered.starts_with("[00:00:01.000]"));
         assert_eq!(lines[1].text, "Second");
     }
+
+    #[test]
+    fn saved_multiword_speaker_displays_with_spaces_at_its_citation() {
+        let folder = tempfile::tempdir().unwrap();
+        let folder = folder.path();
+        std::fs::write(
+            folder.join("transcript.ndjson"),
+            r#"{"start_ms":1000,"source":"microphone","text":"First line"}
+{"start_ms":3200,"speaker":"Mira Fennick","text":"Check the sample."}"#,
+        )
+        .unwrap();
+        std::fs::write(folder.join("english-summary.json"), "{}").unwrap();
+
+        let written = write(folder).unwrap();
+        assert!(written.contains("[00:00:03.200] Mira_Fennick (English): Check the sample."));
+
+        let meeting = crate::core::Meeting::load(folder).unwrap();
+        let cited = meeting.target("00:03.200").unwrap();
+        assert_eq!(cited, 1);
+        assert_eq!(meeting.lines[cited].who, "Mira Fennick");
+        assert_eq!(meeting.lines[cited].text, "Check the sample.");
+    }
+
     #[test]
     fn blank_is_empty() {
         assert!(render("\n{}\ninvalid").is_empty());
