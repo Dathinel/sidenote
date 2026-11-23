@@ -992,7 +992,7 @@ mod tests {
                 let action = new_meeting_button(s, theme::palette(true), true, &mut layer);
                 col().child(action).children(layer)
             },
-            (390.0, 200.0),
+            (360.0, 200.0),
             Env::default(),
             TextSystem::new(theme::fonts(), (theme::SANS, "Inter")),
         );
@@ -1004,9 +1004,13 @@ mod tests {
             .unwrap();
         let checking = elements
             .iter()
-            .find(|e| e.text.as_deref() == Some("Checking for Hex\u{2026}"))
+            .find(|e| e.text.as_deref() == Some("Checking for Hex"))
             .expect("short checking message");
         assert!(checking.rect[1] >= button.rect[1] + button.rect[3] + 5.0);
+        assert_eq!(checking.rect[3], roles::META.lh);
+        let button_right = button.rect[0] + button.rect[2];
+        let checking_right = checking.rect[0] + checking.rect[2];
+        assert!((button_right - checking_right).abs() < 0.5);
     }
 
     #[test]

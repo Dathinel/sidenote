@@ -205,7 +205,7 @@
   "src/ui/cloud_ask.rs": "19f3464bf233e66ba570830d018e9fde4fb7c5d9a0ea1a7e24fd9fe7525f5117",
   "src/ui/edit_worker.rs": "f3d8212397e72b9255aeda147e710d300be5d5b4555ab37ae8c479f82d8387e3",
   "src/ui/final_refresh_proofs.rs": "4989e687f2aa229c6ad0f7883147d48ae569a29e8b271ab8cf96e9c62b68d56c",
-  "src/ui/hex.rs": "cb0ecded8221565b07bce42e43b8edd6830c9d1562d940ff0acc90e8648351f8",
+  "src/ui/hex.rs": "d2dca5ed8e4fbf61b8a15e3a82fb064eed5a42c0f8f447a82ceb70bcc964413e",
   "src/ui/hex/connection/stop_tests.rs": "5dcc96cab3be2f3ec42a93c140b6144500a151e47b2ac1d85d6bc38235911c44",
   "src/ui/hex/connection/stop_tests/api.rs": "249e5ba679241506285eb27864920f89940ad44d599167bc543ff91b736ef175",
   "src/ui/hex/connection/stop_tests/readiness.rs": "1affb66b203a249c971286341d62d22e1b33b3ce745619949bae00e3208c6d81",

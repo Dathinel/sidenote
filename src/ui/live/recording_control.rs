@@ -104,7 +104,7 @@ pub(in crate::ui) fn parts_control(s: &State, k: &Kit, p: Palette, layer: &mut V
     let status = (live && recording).then(|| {
         let words = super::super::nav::recording_words(s, false);
         if s.narrow.get() {
-            roles::META.wrap(words, p.ink).max_w(82.0)
+            roles::META.wrap(words, p.ink)
         } else {
             roles::META.line(words, p.ink).px(8.0)
         }
@@ -230,38 +230,47 @@ mod tests {
     #[test]
     fn live_recording_shows_elapsed_time_beside_pause() {
         crate::test_paths::isolate();
-        let mut state = State::new();
-        let mut live = Live::scene(Phase::Recording, None);
-        live.session = Some(meeting_parts::Meeting {
-            phase: SavedPhase::Recording,
-            parts: vec![meeting_parts::Part {
-                id: "1800000000000-1".into(),
-                started_ms: 1_800_000_000_000,
-                duration_ms: 754_000,
-            }],
-            ..Default::default()
-        });
-        state.live = Some(live);
-        state.live_open = true;
-        let mut rt = Runtime::with_text(
-            state,
-            view,
-            (1334.0, 900.0),
-            Env::default(),
-            TextSystem::new(theme::fonts(), (theme::SANS, "Inter")),
-        );
-        rt.settle_all();
-        rt.frame(0.0);
-        let elements = rt.elements();
-        let keyed = |key| {
-            elements
-                .iter()
-                .find(|element| element.key.as_deref() == Some(key))
-                .unwrap_or_else(|| panic!("missing {key}"))
-        };
-        let status = keyed("live-recording-status");
-        let pause = keyed("meeting-pause");
-        assert_eq!(status.text.as_deref(), Some("Recording 12:34"));
-        assert!(status.rect[0] + status.rect[2] <= pause.rect[0]);
+        for (width, narrow) in [(1334.0, false), (390.0, true), (360.0, true)] {
+            let mut state = State::new();
+            let mut live = Live::scene(Phase::Recording, None);
+            live.session = Some(meeting_parts::Meeting {
+                phase: SavedPhase::Recording,
+                parts: vec![meeting_parts::Part {
+                    id: "1800000000000-1".into(),
+                    started_ms: 1_800_000_000_000,
+                    duration_ms: 754_000,
+                }],
+                ..Default::default()
+            });
+            state.live = Some(live);
+            state.live_open = true;
+            let mut rt = Runtime::with_text(
+                state,
+                view,
+                (width, 900.0),
+                Env::default(),
+                TextSystem::new(theme::fonts(), (theme::SANS, "Inter")),
+            );
+            rt.settle_all();
+            rt.frame(0.0);
+            let elements = rt.elements();
+            let keyed = |key| {
+                elements
+                    .iter()
+                    .find(|element| element.key.as_deref() == Some(key))
+                    .unwrap_or_else(|| panic!("missing {key} at {width} px"))
+            };
+            let status = keyed("live-recording-status");
+            let [x, y, w, h] = status.rect;
+            let pause = keyed("meeting-pause");
+            assert_eq!(status.text.as_deref(), Some("Recording 12:34"));
+            assert_eq!(h, roles::META.lh, "one line at {width} px");
+            assert!(x >= 0.0 && x + w <= width);
+            if narrow {
+                assert!(y + h <= pause.rect[1]);
+            } else {
+                assert!(x + w <= pause.rect[0]);
+            }
+        }
     }
 }
