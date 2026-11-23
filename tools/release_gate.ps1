@@ -136,9 +136,11 @@ function Gate([string]$Name, [scriptblock]$Run) {
     $channelSetup = {
         $channelArgs = @()
         $asrFeatures = 'asr-runtime'
+        $settingsRender = 'artifacts/settings-build-stable'
         if ($env:SIDENOTE_RELEASE_CHANNEL -eq 'nightly') {
             $channelArgs = @('--features', 'nightly')
             $asrFeatures += ',nightly'
+            $settingsRender = 'artifacts/settings-build'
         }
     }
     $command = '$ErrorActionPreference = "Continue"; . { ' + $channelSetup + ' }; & { ' + $Run.ToString() + ' }; exit $LASTEXITCODE'
@@ -218,8 +220,8 @@ Gate 'mcp-smoke' {
 if ($Channel -eq 'stable') {
     Gate 'stable-boundary' { & tools/local_build.ps1 +stable-x86_64-pc-windows-gnu test --locked --test channel_boundary }
 }
-Gate 'settings-render' { python tools/render_settings_build.py }
-Gate 'settings-reachability' { python tools/settings-reachability.py artifacts/settings-build }
+Gate 'settings-render' { python tools/render_settings_build.py --channel $env:SIDENOTE_RELEASE_CHANNEL --output $settingsRender }
+Gate 'settings-reachability' { python tools/settings-reachability.py $settingsRender --channel $env:SIDENOTE_RELEASE_CHANNEL }
 Push-Location (Join-Path $root 'relay')
 Gate 'relay-tests' { bun test tests }
 Pop-Location
