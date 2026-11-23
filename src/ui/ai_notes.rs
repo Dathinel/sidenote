@@ -1325,13 +1325,21 @@ pub fn setup_card(s: &State, p: Palette) -> Option<El> {
     let helper = HELPERS
         .into_iter()
         .find(|h| h.offered() && a.found.contains(&(*h, true)));
-    let text = if helper.is_some() {
-        "An AI agent is installed. Choose an agent to write meeting summaries."
+    let setup = if helper.is_some() {
+        roles::SMALL.wrap(
+            "An AI agent is installed. Choose an agent to write meeting summaries.",
+            p.soft,
+        )
     } else {
-        SETUP_STEPS
+        col()
+            .gap(4.0)
+            .child(roles::SMALL.wrap("1. Install Claude Code.", p.soft))
+            .child(roles::SMALL.wrap("2. In a terminal, run claude and sign in.", p.soft))
+            .child(roles::SMALL.wrap("3. Press Check again.", p.soft))
     };
     let card = card(p).key("today-ai-notes").mb(16.0)
-        .child(roles::TITLE.wrap(if helper.is_some() { "Summaries for your meetings" } else { "Meeting summaries need an agent" }, p.ink)).child(roles::SMALL.wrap(text, p.soft))
+        .child(roles::TITLE.wrap(if helper.is_some() { "Summaries for your meetings" } else { "Meeting summaries need an agent" }, p.ink))
+        .child(setup)
         .child(roles::SMALL.wrap("After you turn on Meeting summary, meeting text is sent through your selected agent account.", p.soft));
     let mut actions = row().flex_wrap().gaps(8.0, 8.0);
     if helper.is_none() {
