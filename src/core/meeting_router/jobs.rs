@@ -663,6 +663,8 @@ pub(crate) fn run_one_in(request: &Path, root: &Path) -> Result<()> {
         {
             let mut config = super::super::Config::load_in(root)?;
             config.pipeline = job.config.clone();
+            #[cfg(feature = "asr-runtime")]
+            config.labs.language_detection_settings.mark_after_stop();
             let batches = work.join("batches");
             fs::create_dir_all(&batches)?;
             super::production::run(

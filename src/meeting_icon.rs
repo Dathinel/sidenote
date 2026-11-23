@@ -10,6 +10,36 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(windows)]
+pub const WINDOW_NUB_ARG: &str = "--open-from-meeting-icon=";
+#[cfg(windows)]
+pub fn open_window_message() -> u32 {
+    use windows_sys::{Win32::UI::WindowsAndMessaging::RegisterWindowMessageW, w};
+    unsafe { RegisterWindowMessageW(w!("Sidenote.OpenFromMeetingIcon.v1")) }
+}
+
+#[cfg(any(windows, test))]
+pub fn can_restore(placed: [i32; 4], current: Option<[i32; 4]>) -> bool {
+    current == Some(placed)
+}
+
+#[cfg(any(windows, test))]
+pub fn beside(work: [i32; 4], icon: [i32; 4], size: [i32; 2], gap: i32) -> [i32; 4] {
+    let [left, top, right, bottom] = work;
+    let [x, y, icon_width, _] = icon;
+    let width = size[0].min(right - left);
+    let height = size[1].min(bottom - top);
+    let right_of_icon = x + icon_width + gap;
+    let x = if right - right_of_icon >= width || right - right_of_icon >= x - gap - left {
+        right_of_icon
+    } else {
+        x - gap - width
+    };
+    let x = x.clamp(left, right - width);
+    let y = y.clamp(top, bottom - height);
+    [x, y, width, height]
+}
+
 #[derive(Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
 struct Snapshot {
@@ -558,6 +588,28 @@ mod tests {
             counts.push((stats.reads, stats.entries));
         }
         assert_eq!(counts, [(0, 0); 4], "reads and directory entries per frame");
+    }
+
+    #[test]
+    #[test]
+    fn meeting_window_chooses_a_side_and_fits_the_work_area() {
+        let work = [0, 0, 1334, 860];
+        let small = [-350, 20, 0, 420];
+        for (work, icon, expected) in [
+            (work, [10, 330, 46, 109], [64, 180, 400, 680]),
+            (work, [1278, 330, 46, 109], [870, 180, 400, 680]),
+            (small, [-56, 340, 46, 109], [-350, 20, 350, 400]),
+        ] {
+            assert_eq!(beside(work, icon, [400, 680], 8), expected);
+        }
+    }
+
+    #[test]
+    fn meeting_window_restores_only_while_it_has_the_placed_geometry() {
+        let placed = [870, 180, 400, 680];
+        assert!(can_restore(placed, Some(placed)));
+        assert!(!can_restore(placed, Some([871, 180, 400, 680])));
+        assert!(!can_restore(placed, Some([870, 180, 401, 680])));
     }
 
     #[test]

@@ -1,6 +1,8 @@
 //! Enter through the production bridge factory and batch executor, with real child HTTP I/O.
+use super::super::hex_http::HTTP_PHASES;
 use super::no_speech_tests::{Fixture, NativeFake};
 use super::*;
+use std::io::Write;
 fn captured() -> Value {
     serde_json::from_str(include_str!("http_reply_fixture.json")).unwrap()
 }
@@ -80,6 +82,39 @@ fn count(f: &Fixture, name: &str) -> u32 {
 fn receipt(f: &Fixture) -> Value {
     serde_json::from_slice(&fs::read(f.work.join("english-transport.json")).unwrap()).unwrap()
 }
+fn run_timed(f: &Fixture, mode: u8, timeout: Duration, request_timeout: Duration) {
+    HTTP_PHASES.take();
+    let result = run_with_request_timeout(f, timeout, request_timeout);
+    let finished = Instant::now();
+    let phases = HTTP_PHASES.take();
+    let (started, failed_at) = phases.request_io.expect("stalled HTTP exchange");
+    let (sample, deadline) = phases.request_budget.expect("request budget clock");
+    let allowance = deadline.duration_since(sample) / 2;
+    let elapsed = failed_at.duration_since(started);
+    let reap = phases
+        .aborted
+        .expect("successful service abort")
+        .duration_since(failed_at);
+    let tail = finished.duration_since(phases.batches_done.expect("batch executor returned"));
+    // Write directly so hosted logs retain timing samples from passing runs.
+    writeln!(
+        std::io::stderr().lock(),
+        "HTTP fixture mode {mode}: request elapsed={elapsed:?}, allowance={allowance:?}, reap={reap:?}, tail={tail:?}"
+    )
+    .unwrap();
+    let slack = Duration::from_millis(750);
+    assert!(
+        elapsed <= allowance + slack,
+        "stalled HTTP request exceeded its share"
+    );
+    assert!(reap < Duration::from_secs(8), "service was reaped late");
+    assert!(
+        tail < Duration::from_secs(8),
+        "batch teardown finished late"
+    );
+    result.unwrap();
+}
+
 fn reaped(f: &Fixture) {
     use windows_sys::Win32::{Foundation::CloseHandle, System::Threading::*};
     let pid: u32 = fs::read_to_string(f.work.join("service-pid"))
@@ -168,12 +203,16 @@ fn production_http_timeout_reaps_request_and_handshake_children() {
 #[test]
 fn production_http_request_failure_preserves_whole_run_budget() {
     let f = fixture(9);
-    let start = Instant::now();
-    run(&f, Duration::from_millis(900)).unwrap();
-    assert!(start.elapsed() < Duration::from_secs(8));
+    // The caller's deadline, rather than the bridge's configured cap, limits this run.
+    run_timed(&f, 9, Duration::from_secs(10), Duration::from_secs(20));
     assert_eq!(count(&f, "starts"), 1);
+    assert_eq!(count(&f, "http-calls"), 1);
+    assert_eq!(count(&f, "command-calls"), 0);
     reaped(&f);
-    assert!(receipt(&f)["fallback_reason"].is_string());
+    let r = receipt(&f);
+    assert_eq!(r["fallback_reason"], "service-request");
+    assert!(f.work.join("hi.clock.json").exists());
+    assert!(f.work.join("te.clock.json").exists());
 }
 
 #[test]

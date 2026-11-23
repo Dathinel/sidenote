@@ -383,13 +383,17 @@ impl NativeWindow {
     }
     pub(super) fn update(&self, frame: Frame) {
         let prior = self.view.frame.replace(frame.clone());
-        let changed = icon_changed(&prior, &frame);
+        let changed =
+            icon_changed(&prior, &frame) || unsafe { IsWindowVisible(self.view.icon.get()) == 0 };
         let card_changed = prior.id != frame.id
             || prior.recording != frame.recording
             || prior.raw != frame.raw
             || prior.notice != frame.notice
             || prior.skipped != frame.skipped;
         unsafe {
+            if !self.view.refresh_capture() {
+                return;
+            }
             let geometry = self.view.geometry();
             if (changed || geometry) && self.view.paint_icon().is_err() {
                 crate::listener::log("FI_PAINT_FAILED");
@@ -548,12 +552,18 @@ impl View {
         }
     }
 
-    fn refresh_capture(&self) {
-        let visible = core::Config::meeting_icon_capture_allowed(&self.config_root);
-        if self.capture_visible.replace(visible) == visible {
-            return;
-        }
+    fn refresh_capture(&self) -> bool {
+        let (enabled, visible) = core::Config::meeting_icon_settings(&self.config_root);
         unsafe {
+            if !enabled
+                && (IsWindowVisible(self.icon.get()) != 0 || IsWindowVisible(self.card.get()) != 0)
+            {
+                self.hide_card();
+                ShowWindow(self.icon.get(), SW_HIDE);
+            }
+            if self.capture_visible.replace(visible) == visible {
+                return enabled && !self.icon.get().is_null();
+            }
             let card = self.card.get();
             if !card.is_null() && apply_capture_affinity(card, visible).is_err() {
                 self.destroy(card);
@@ -562,7 +572,26 @@ impl View {
                 self.close_windows();
             }
         }
+        enabled && !self.icon.get().is_null()
     }
+
+    unsafe fn open_meeting_window(icon: HWND) {
+        use crate::meeting_icon::{WINDOW_NUB_ARG, open_window_message};
+        unsafe {
+            let main = FindWindowW(ptr::null(), wide("Sidenote").as_ptr());
+            if !main.is_null() {
+                let mut process = 0;
+                GetWindowThreadProcessId(main, &mut process);
+                AllowSetForegroundWindow(process);
+                PostMessageW(main, open_window_message(), icon as usize, 0);
+            } else if let Ok(exe) = std::env::current_exe() {
+                let _ = std::process::Command::new(exe)
+                    .arg(format!("{WINDOW_NUB_ARG}{}", icon as usize))
+                    .spawn();
+            }
+        }
+    }
+
     fn animation_due(&self, step: usize) -> bool {
         let frame = self.frame.borrow();
         frame.recording
@@ -1254,6 +1283,11 @@ unsafe fn icon_message(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
                             if v.reopen.get() {
                                 v.open_card();
                             }
+                        } else if !v.refresh_capture() {
+                            return 0;
+                        } else if v.frame.borrow().recording && !v.replay {
+                            v.hide_card();
+                            View::open_meeting_window(hwnd);
                         } else if v
                             .frame
                             .borrow()

@@ -243,6 +243,9 @@ pub(super) fn run_batches(
 ) -> Result<()> {
     let batches_started = Instant::now();
     let result = batches::run_until(work, plan, native, bridge, deadline);
+    #[cfg(test)]
+    super::super::hex_http::HTTP_PHASES
+        .with_borrow_mut(|phases| phases.batches_done = Some(Instant::now()));
     let cleanup = bridge.finish();
     let result = result.and(cleanup);
     clocks.insert("batches".into(), batches_started.elapsed().as_secs_f64());

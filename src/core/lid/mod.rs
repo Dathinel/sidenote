@@ -28,6 +28,9 @@ pub struct Settings {
     pub confidence_threshold: f32,
     pub margin_threshold: f32,
     pub silence_mean_square: f32,
+    #[cfg(any(all(windows, feature = "asr-runtime"), test))]
+    #[serde(skip)]
+    after_stop: bool,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -37,10 +40,17 @@ impl Default for Settings {
             confidence_threshold: 0.9,
             margin_threshold: 0.2,
             silence_mean_square: 0.00001,
+            #[cfg(any(all(windows, feature = "asr-runtime"), test))]
+            after_stop: false,
         }
     }
 }
 impl Settings {
+    #[cfg(any(all(windows, feature = "asr-runtime"), test))]
+    pub(crate) fn mark_after_stop(&mut self) {
+        self.after_stop = true;
+    }
+
     pub fn validate(&self) -> super::asr::Result<()> {
         for value in [
             self.confidence_threshold,

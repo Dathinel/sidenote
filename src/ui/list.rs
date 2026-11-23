@@ -135,7 +135,12 @@ fn home_row(
         .grow(1.0)
         .min_w(0.0)
         .gap(2.0)
-        .child(roles::TITLE.line(&m.title, p.ink))
+        .child(
+            roles::TITLE
+                .wrap(&m.title, p.ink)
+                .wrap_anywhere()
+                .max_lines(2),
+        )
         .child(
             roles::META.line(
                 super::notes_status::list_label(s, m)
@@ -157,12 +162,16 @@ fn home_row(
     let mut r = row()
         .w_full()
         .gap(12.0)
-        .items_center()
         .px(10.0)
         .py(9.0)
         .radius(10.0)
-        .hover(p.chip)
-        .child(main);
+        .hover(p.chip);
+    r = if narrow {
+        r.items_start()
+    } else {
+        r.items_center()
+    };
+    r = r.child(main);
     if problem && let Some(job) = &notes_job {
         let setup = matches!(
             job.state,
@@ -217,15 +226,20 @@ fn home_row(
     if !narrow && let Some(chip) = project::chip(s, k, &m.id, p, layer) {
         r = r.child(chip);
     }
-    r = r.child(row().w(44.0).justify_end().child(roles::meta(at, p)));
-    r = r.child(super::more::menu(s, k, m, "row", p, layer));
+    let more = super::more::menu(s, k, m, "row", p, layer);
+    let time = roles::meta(at, p);
+    r = if narrow {
+        r.child(col().items_end().child(more).child(time))
+    } else {
+        r.child(row().w(44.0).justify_end().child(time)).child(more)
+    };
     let keyboard = (s.keyboard || !s.search.text.trim().is_empty()) && s.cursor == position;
     if keyboard {
         r = r.fill(p.chip);
     }
     let mut out = col().w_full().child(r);
     if narrow && let Some(chip) = project::chip(s, k, &m.id, p, layer) {
-        out = out.child(chip.self_start().ml(56.0).mb(6.0));
+        out = out.child(row().w_full().pl(56.0).mb(6.0).child(chip.shrink()));
     }
     if let Some(form) = project::form(s, k, &m.id, p) {
         out = out.child(form.ml(56.0).mb(6.0));

@@ -247,6 +247,8 @@ pub struct Config {
     pub labs: super::meeting_watch::Labs,
     #[serde(default)]
     pub meeting_icon_in_captures: bool,
+    #[serde(default = "meeting_icon_default")]
+    pub meeting_icon_enabled: bool,
     #[serde(default)]
     pub knowledge_base: KnowledgeBase,
     #[serde(default)]
@@ -259,6 +261,10 @@ pub struct Config {
     baseline: Option<serde_json::Value>,
 }
 
+fn meeting_icon_default() -> bool {
+    true
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -267,6 +273,7 @@ impl Default for Config {
             features: Features::default(),
             labs: super::meeting_watch::Labs::default(),
             meeting_icon_in_captures: false,
+            meeting_icon_enabled: meeting_icon_default(),
             knowledge_base: KnowledgeBase::default(),
             pipeline: super::meeting_router::RoutingConfig::default(),
             notes: None,
@@ -284,6 +291,8 @@ impl Config {
     pub fn load_in(root: &Path) -> io::Result<Self> {
         let mut config = Self::read_config(root)?;
         if config.as_ref().is_none_or(|c| c.notes.is_none()) {
+            #[cfg(all(test, windows))]
+            tests::before_migration_lock();
             let _lock = lock(root)?;
             // Another writer may have published or migrated while we waited.
             config = Self::read_config(root)?;
@@ -354,10 +363,30 @@ impl Config {
     #[cfg(feature = "desktop")]
     pub fn meeting_icon_capture_allowed(root: &Path) -> bool {
         // The native window timer must fail closed on sharing errors without retrying.
-        std::fs::read(root.join("config.json"))
-            .ok()
-            .and_then(|bytes| Self::decode(&bytes).ok())
-            .is_some_and(|config| config.version == 1 && config.meeting_icon_in_captures)
+        Self::meeting_icon_settings(root).1
+    }
+
+    #[cfg(feature = "desktop")]
+    pub fn meeting_icon_settings(root: &Path) -> (bool, bool) {
+        match std::fs::read(root.join("config.json")) {
+            Ok(bytes) => Self::decode(&bytes)
+                .ok()
+                .filter(|config| config.version == 1)
+                .map_or((false, false), |config| {
+                    (config.meeting_icon_enabled, config.meeting_icon_in_captures)
+                }),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => (meeting_icon_default(), false),
+            Err(_) => (false, false),
+        }
+    }
+
+    #[cfg(feature = "desktop")]
+    pub fn toggle_meeting_icon(root: &Path) -> io::Result<Self> {
+        let _lock = lock(root)?;
+        let mut config = Self::load_existing(root)?;
+        config.meeting_icon_enabled = !config.meeting_icon_enabled;
+        config.save_locked(root)?;
+        Ok(config)
     }
 
     #[cfg(feature = "desktop")]
@@ -746,6 +775,27 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "desktop")]
+    fn meeting_icon_visibility_defaults_on_and_saves_under_the_writer_lock() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        assert_eq!(Config::meeting_icon_settings(root), (true, false));
+        let path = root.join("config.json");
+        std::fs::write(&path, br#"{"version":1,"features":{},"notes":{}}"#).unwrap();
+        assert_eq!(Config::meeting_icon_settings(root), (true, false));
+        Config::toggle_meeting_icon(root).unwrap();
+        assert_eq!(Config::meeting_icon_settings(root), (false, false));
+        let writer = lock(root).unwrap();
+        assert!(Config::toggle_meeting_icon(root).is_err());
+        assert_eq!(Config::meeting_icon_settings(root), (false, false));
+        drop(writer);
+        Config::toggle_meeting_icon(root).unwrap();
+        assert_eq!(Config::meeting_icon_settings(root), (true, false));
+        std::fs::write(path, b"invalid").unwrap();
+        assert_eq!(Config::meeting_icon_settings(root), (false, false));
+    }
+
+    #[test]
     fn published_config_reads_ignore_writer_lock_but_saves_are_busy() {
         let root = tempfile::tempdir().unwrap();
         let initial = Config {
@@ -807,6 +857,19 @@ mod tests {
     }
 
     #[cfg(windows)]
+    thread_local! {
+        static BEFORE_MIGRATION_LOCK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+            const { std::cell::RefCell::new(None) };
+    }
+
+    #[cfg(windows)]
+    pub(super) fn before_migration_lock() {
+        if let Some(hook) = BEFORE_MIGRATION_LOCK.take() {
+            hook();
+        }
+    }
+
+    #[cfg(windows)]
     #[test]
     fn migration_rechecks_under_lock_and_preserves_winning_publication() {
         for missing in [false, true] {
@@ -817,8 +880,17 @@ mod tests {
             }
             let held = store_io::lock(&path.join("local/config.lock")).unwrap();
             std::thread::scope(|scope| {
-                let reader = scope.spawn(move || Config::load_in(path).unwrap());
-                std::thread::sleep(std::time::Duration::from_millis(75));
+                let (read, observed) = std::sync::mpsc::channel();
+                let (released, resume) = std::sync::mpsc::channel();
+                let reader = scope.spawn(move || {
+                    BEFORE_MIGRATION_LOCK.replace(Some(Box::new(move || {
+                        read.send(()).unwrap();
+                        resume.recv().unwrap();
+                    })));
+                    Config::load_in(path).unwrap()
+                });
+                // Keep publication outside the reader's bounded lock acquisition.
+                observed.recv().unwrap();
                 let winner = Config {
                     notes: Some(super::super::notes::NotesSettings::default()),
                     features: Features {
@@ -830,6 +902,7 @@ mod tests {
                 store_io::write(&path.join("config.json"), &winner).unwrap();
                 let bytes = std::fs::read(path.join("config.json")).unwrap();
                 drop(held);
+                released.send(()).unwrap();
                 assert!(reader.join().unwrap().features.tasks);
                 assert_eq!(std::fs::read(path.join("config.json")).unwrap(), bytes);
             });

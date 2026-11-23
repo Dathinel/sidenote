@@ -132,18 +132,14 @@ fn preflight(dll: &Path) -> Result<()> {
     Ok(())
 }
 
-fn builder() -> Result<ort::session::builder::SessionBuilder> {
+fn builder(threads: usize) -> Result<ort::session::builder::SessionBuilder> {
     if RUNTIME.get().is_none_or(|r| r.is_err()) {
         return Err("Initialize the local ONNX runtime first".into());
     }
     Ok(Session::builder()?
-        .with_intra_threads(1)?
+        .with_intra_threads(threads)?
         .with_inter_threads(1)?
         .with_memory_pattern(false)?)
-}
-
-fn session(path: &Path) -> Result<Session> {
-    Ok(builder()?.commit_from_file(path)?)
 }
 
 pub struct Anuvani {
@@ -152,15 +148,19 @@ pub struct Anuvani {
 }
 impl Anuvani {
     pub fn load(model: &Path) -> Result<Self> {
+        Self::load_with_threads(model, 1)
+    }
+
+    pub(crate) fn load_with_threads(model: &Path, threads: usize) -> Result<Self> {
         let start = Instant::now();
-        Self::checked(session(model)?, start)
+        Self::checked(builder(threads)?.commit_from_file(model)?, start)
     }
 
     /// Loads bytes the caller already hashed, so no later file edit can change the graph.
     #[cfg(target_os = "linux")]
     pub fn load_verified(model: &[u8]) -> Result<Self> {
         let start = Instant::now();
-        Self::checked(builder()?.commit_from_memory(model)?, start)
+        Self::checked(builder(1)?.commit_from_memory(model)?, start)
     }
 
     fn checked(session: Session, start: Instant) -> Result<Self> {

@@ -6,10 +6,10 @@
 //! while Hex records, except on the meeting page that already shows Pause.
 //! Lucide entries live in icons.rs; the app mark keeps its original colours.
 use super::{
-    State, hex, roles,
+    State, hex, icons, roles,
     tasks::View,
     theme::Palette,
-    widgets::{dot, pressable},
+    widgets::{dot, menu_row, menu_separator, menu_surface, menu_trigger, pressable},
 };
 use chrono::{DateTime, Local};
 use rune::{Color, El, col, el, row};
@@ -17,7 +17,7 @@ use sidenote::core::{self, UiPrefs};
 use std::collections::HashMap;
 
 /// The open sidebar, and the rail it folds to, in points.
-pub const WIDE: f32 = 248.0;
+pub const WIDE: f32 = 240.0;
 pub const RAIL: f32 = 56.0;
 /// A window this wide or narrower starts with the sidebar folded.
 pub const COLLAPSE_AT: f32 = 820.0;
@@ -205,31 +205,31 @@ pub fn width(s: &State) -> f32 {
 // ---- icons ------------------------------------------------------------------------------------
 
 fn icon_meetings(c: Color) -> El {
-    super::icons::draw(&super::icons::MEETINGS, 18.0, c)
+    icons::draw(&icons::MEETINGS, icons::ROW, c)
 }
 fn icon_tasks(c: Color) -> El {
-    super::icons::draw(&super::icons::TASKS, 18.0, c)
+    icons::draw(&icons::TASKS, icons::ROW, c)
 }
 fn icon_memory(c: Color) -> El {
-    super::icons::draw(&super::icons::MEMORY, 18.0, c)
+    icons::draw(&icons::MEMORY, icons::ROW, c)
 }
 fn icon_check(c: Color, _: Color) -> El {
-    super::icons::draw(&super::icons::DIARY, 18.0, c)
+    icons::draw(&icons::DIARY, icons::ROW, c)
 }
 fn icon_device(c: Color) -> El {
-    super::icons::draw(&super::icons::DEVICE, 18.0, c)
+    icons::draw(&icons::DEVICE, icons::ROW, c)
 }
 // ---- the sidebar ------------------------------------------------------------------------------
 
-/// Row heights: the three places, the tools in the footer, and a project under its label.
-const MAIN_H: f32 = 40.0;
-/// The open sidebar's side padding, and how far a project sits in from its label.
-const PAD: f32 = 10.0;
+const MAIN_H: f32 = 32.0;
+const PAD: f32 = 8.0;
+const RAIL_ITEM_W: f32 = 36.0;
+const SIGNAL_D: f32 = 6.0;
+const SIGNAL_INSET: f32 = 10.0;
 
-/// The one quiet mark for something that waits on the user: memory proposals to review, high
-/// findings of the daily check in the Diary. Counts live on those pages.
+/// Signals for memory proposals to review and high findings in the Diary.
 fn signal(c: Color) -> El {
-    dot(7.0, c)
+    dot(SIGNAL_D, c)
 }
 
 /// The fill and the hover fill. A selected row keeps its fill under the pointer.
@@ -241,16 +241,16 @@ fn fills(active: bool, p: Palette) -> (Color, Color) {
     }
 }
 
-/// A place's name: 600 in `ink` when active, 400 in `soft` otherwise.
+/// A place's name: 400 in `ink` when active, 400 in `soft` otherwise.
 fn place_name(name: &str, active: bool, p: Palette) -> El {
     if active {
-        roles::NAV.bold().line(name, p.ink)
+        roles::NAV.line(name, p.ink)
     } else {
         roles::NAV.line(name, p.soft)
     }
 }
 
-/// One of the places in the open sidebar: an icon and a name on a 40-point row.
+/// One of the places in the open sidebar: an icon and a name on a 32-point row.
 fn main_row(place: Place, icon: El, p: Palette) -> El {
     let mut r = row()
         .w_full()
@@ -259,15 +259,15 @@ fn main_row(place: Place, icon: El, p: Palette) -> El {
         .items_center()
         .px(PAD)
         .child(icon)
-        .child(place_name(place.name, place.active, p));
+        .child(place_name(place.name, place.active, p).grow(1.0));
     if let Some(c) = place.flag {
-        r = r.child(signal(c));
+        r = r.child(signal(c).mr(SIGNAL_INSET - PAD));
     }
     let (bg, hover) = fills(place.active, p);
     pressable(r)
         .key(place.key)
         .label(place.help)
-        .radius(8.0)
+        .radius(7.0)
         .fill(bg)
         .hover(hover)
         .on_press(place.press)
@@ -275,16 +275,20 @@ fn main_row(place: Place, icon: El, p: Palette) -> El {
 
 /// A place or a tool in the rail: the icon alone, with the place's dot on its corner.
 fn rail_item(place: Place, icon: El, p: Palette) -> El {
-    let mut b = col().w(40.0).h(36.0).center().child(icon);
+    let mut b = col().size(RAIL_ITEM_W, MAIN_H).center().child(icon);
     if let Some(c) = place.flag {
-        b = b.child(dot(8.0, c).absolute(24.0, 5.0).border(1.5, p.side));
+        b = b.child(
+            signal(c)
+                .absolute(RAIL_ITEM_W - SIGNAL_INSET - SIGNAL_D, 5.0)
+                .border(1.5, p.side),
+        );
     }
     let (bg, hover) = fills(place.active, p);
     pressable(b)
         .key(place.key)
         .label(place.help.clone())
         .help(place.help)
-        .radius(8.0)
+        .radius(7.0)
         .fill(bg)
         .hover(hover)
         .on_press(place.press)
@@ -299,15 +303,18 @@ fn toggle(s: &State, p: Palette) -> El {
     };
     super::widgets::icon_button(
         if open {
-            &super::icons::PANEL_CLOSE
+            &icons::PANEL_CLOSE
         } else {
-            &super::icons::PANEL_OPEN
+            &icons::PANEL_OPEN
         },
         name,
         "sidebar-toggle",
         super::widgets::ButtonRole::Ghost,
         p,
     )
+    .size(28.0, 28.0)
+    .px(6.0)
+    .radius(7.0)
     .on_press(|s: &mut State| s.toggle_sidebar())
 }
 
@@ -328,9 +335,8 @@ impl Place {
     }
 }
 
-/// The places (Meetings, Tasks, Memory, Diary), the tools (Settings) and the filter for
-/// meetings from other devices, when there are any.
-fn places(s: &State, _p: Palette) -> (Vec<Place>, Option<Place>) {
+/// The main places and the filter for meetings from other devices, when there are any.
+fn places(s: &State, p: Palette) -> (Vec<Place>, Option<Place>) {
     let page = s.page();
     let features = &s.config.features;
     let open_tasks = s.tasks.counts.open;
@@ -345,15 +351,6 @@ fn places(s: &State, _p: Palette) -> (Vec<Place>, Option<Place>) {
         flag: None,
         press: |s| s.go_meetings(),
     }];
-    places.push(Place {
-        key: "nav-annotations",
-        name: "Annotations",
-        help: "Annotations".into(),
-        active: page == Page::Annotations,
-        icon: |c, _| super::icons::draw(&super::icons::ANNOTATIONS, 18.0, c),
-        flag: None,
-        press: |s| s.open_annotations(),
-    });
     if features.tasks {
         places.push(Place {
             key: "view-tasks",
@@ -376,7 +373,7 @@ fn places(s: &State, _p: Palette) -> (Vec<Place>, Option<Place>) {
         name: "People",
         help: "People".into(),
         active: page == Page::People,
-        icon: |c, _| super::icons::draw(&super::icons::PEOPLE, 18.0, c),
+        icon: |c, _| icons::draw(&icons::PEOPLE, icons::ROW, c),
         flag: None,
         press: State::open_people,
     });
@@ -391,7 +388,7 @@ fn places(s: &State, _p: Palette) -> (Vec<Place>, Option<Place>) {
             },
             active: page == Page::Memory,
             icon: |c, _| icon_memory(c),
-            flag: None,
+            flag: (proposals > 0).then_some(p.warn),
             press: |s| {
                 s.open_memory();
                 s.nav_done();
@@ -411,13 +408,22 @@ fn places(s: &State, _p: Palette) -> (Vec<Place>, Option<Place>) {
             },
             active: page == Page::Check,
             icon: icon_check,
-            flag: None,
+            flag: (high > 0).then_some(p.warn),
             press: |s| {
                 s.open_check();
                 s.nav_done();
             },
         });
     }
+    places.push(Place {
+        key: "nav-annotations",
+        name: "Annotations",
+        help: "Annotations".into(),
+        active: page == Page::Annotations,
+        icon: |c, _| icons::draw(&icons::ANNOTATIONS, icons::ROW, c),
+        flag: None,
+        press: |s| s.open_annotations(),
+    });
     let peers = (features.other_devices && s.nav.peers > 0).then(|| Place {
         key: "nav-peers",
         name: "Other devices",
@@ -434,54 +440,54 @@ fn places(s: &State, _p: Palette) -> (Vec<Place>, Option<Place>) {
 }
 
 /// The sidebar. `wide` is the open sidebar; otherwise the rail of icons.
-///
-/// Three tiers: the places (Meetings, Tasks, Memory, Diary) on 40-point rows with icons; the
-/// projects as lighter 32-point rows under a quiet label; one profile button in the
-/// footer. Routine counts live on their pages. Two dots remain, because each waits on the user:
-/// memory proposals to review, and high findings of the daily check in the Diary.
 pub fn sidebar(s: &State, p: Palette, wide: bool, layer: &mut Vec<El>) -> El {
     if !wide && !s.hex_recording() {
         return el().w(0.0).h_full();
     }
     let (places, peers) = places(s, p);
 
-    let mut header = row().w_full().h(52.0).gap(8.0).items_center().child(logo());
-    header = if wide {
+    let header = row().w_full().h(48.0).gap(10.0).items_center();
+    let header = if wide {
         header
-            .px(6.0)
-            .child(roles::TITLE.wrap("Sidenote", p.ink).grow(1.0))
+            .child(logo())
+            .pl(PAD)
+            .child(roles::COMPACT_SECTION.line("Sidenote", p.ink).grow(1.0))
             .child(toggle(s, p))
     } else {
         col()
             .w_full()
-            .h(88.0)
-            .gap(8.0)
-            .items_center()
-            .pt(12.0)
+            .h(48.0)
+            .gap(2.0)
+            .center()
             .child(logo())
             .child(toggle(s, p))
     };
 
     let search = pressable(
         row()
-            .w_full()
-            .h(34.0)
-            .gap(8.0)
+            .w(if wide { WIDE - 2.0 * PAD } else { RAIL_ITEM_W })
+            .h(30.0)
+            .gap(10.0)
             .items_center()
-            .px(10.0)
-            .child(super::icons::draw(&super::icons::SEARCH, 16.0, p.soft))
-            .children(wide.then(|| roles::CONTROL.line("Search", p.soft).grow(1.0)))
-            .children(wide.then(|| roles::META.line("/", p.faint))),
+            .px(if wide { PAD } else { 10.0 })
+            .child(icons::draw(&icons::SEARCH, icons::ROW, p.faint))
+            .children(wide.then(|| roles::NAV.line("Search", p.faint).grow(1.0)))
+            .children(wide.then(|| {
+                roles::META
+                    .line("Ctrl K", p.faint)
+                    .px(6.0)
+                    .radius(5.0)
+                    .border(1.0, p.line)
+            })),
     )
     .key("nav-search")
     .label("Search (/ or Ctrl+K)")
     .help("Search (/ or Ctrl+K)")
-    .radius(7.0)
-    .fill(p.card)
-    .border(1.0, p.line)
+    .radius(8.0)
+    .fill(p.chip)
     .hover(p.chip)
     .on_press(|s: &mut State| s.toggle_finder());
-    let mut top = col().w_full().gap(2.0).child(search.mb(10.0));
+    let mut top = col().w_full().gap(1.0).items_center();
     for place in places {
         let icon = place.icon(p);
         top = top.child(if wide {
@@ -493,20 +499,21 @@ pub fn sidebar(s: &State, p: Palette, wide: bool, layer: &mut Vec<El>) -> El {
 
     let middle = col().grow(1.0);
 
-    if wide && let Some(place) = peers {
+    let devices = peers.filter(|_| wide).map(|place| {
         let icon = place.icon(p);
-        top = top.child(main_row(place, icon, p));
-    }
-    let mut footer = col()
-        .w_full()
-        .pt(6.0)
-        .pb(8.0)
-        .child(profile(s, p, wide, layer));
+        let heading = roles::META.line(place.name, p.faint);
+        col()
+            .w_full()
+            .mt(12.0)
+            .child(row().h(28.0).px(PAD).items_center().child(heading))
+            .child(main_row(place, icon, p))
+    });
+    let mut footer = col().w_full().pb(8.0).child(profile(s, p, wide, layer));
     if !wide && s.hex_recording() {
-        footer = footer.child(
-            pressable(col().w(40.0).h(36.0).center().child(super::icons::draw(
-                &super::icons::MIC,
-                18.0,
+        footer = footer.items_center().child(
+            pressable(col().size(RAIL_ITEM_W, MAIN_H).center().child(icons::draw(
+                &icons::MIC,
+                icons::ROW,
                 p.danger,
             )))
             .key("rail-recording")
@@ -522,9 +529,11 @@ pub fn sidebar(s: &State, p: Palette, wide: bool, layer: &mut Vec<El>) -> El {
         .h_full()
         .min_h(0.0)
         .fill(p.side)
-        .px(if wide { PAD } else { 8.0 })
+        .px(PAD)
         .child(header)
+        .child(search.mb(8.0))
         .child(top)
+        .children(devices)
         .child(middle)
         .child(footer);
     if !wide {
@@ -696,14 +705,15 @@ fn recording_pill(s: &State, p: Palette, narrow: bool) -> El {
 }
 
 fn logo() -> El {
-    let mut mark = el().size(20.0, 20.0);
+    const SIZE: f32 = 18.0;
+    let mut mark = el().size(SIZE, SIZE);
     static PART_0: rune::Icon = rune::Icon {
         name: "sidenote-logo-0",
         view: 20.0,
         body: r#"<rect x="0" y="0" width="20" height="20" rx="4.5" fill="currentColor"/>"#,
     };
     mark = mark.child(
-        rune::icon(&PART_0, 20.0)
+        rune::icon(&PART_0, SIZE)
             .color(rune::color::hex("#bcb9b0").expect("logo colour"))
             .absolute(0.0, 0.0),
     );
@@ -713,7 +723,7 @@ fn logo() -> El {
         body: r#"<rect x="1" y="1" width="18" height="18" rx="3.5" fill="currentColor"/>"#,
     };
     mark = mark.child(
-        rune::icon(&PART_1, 20.0)
+        rune::icon(&PART_1, SIZE)
             .color(rune::color::hex("#1e1e1c").expect("logo colour"))
             .absolute(0.0, 0.0),
     );
@@ -723,7 +733,7 @@ fn logo() -> El {
         body: r#"<path d="M5 6 H7 V7 H5 Z M4 7 H8 V8 H4 Z M3 8 H5 V9 H3 Z M7 8 H9 V9 H7 Z M3 9 H5 V10 H3 Z M7 9 H9 V10 H7 Z M3 10 H5 V11 H3 Z M8 10 H10 V11 H8 Z M3 11 H5 V12 H3 Z M8 11 H10 V12 H8 Z M12 11 H15 V12 H12 Z M3 12 H5 V13 H3 Z M9 12 H15 V13 H9 Z M10 13 H13 V14 H10 Z M11 14 H13 V15 H11 Z" fill="currentColor"/>"#,
     };
     mark = mark.child(
-        rune::icon(&PART_2, 20.0)
+        rune::icon(&PART_2, SIZE)
             .color(rune::color::hex("#fcfbf8").expect("logo colour"))
             .absolute(0.0, 0.0),
     );
@@ -733,13 +743,14 @@ fn logo() -> El {
         body: r#"<path d="M15 11 H17 V12 H15 Z M15 12 H17 V13 H15 Z" fill="currentColor"/>"#,
     };
     mark = mark.child(
-        rune::icon(&PART_3, 20.0)
+        rune::icon(&PART_3, SIZE)
             .color(rune::color::hex("#e3aa55").expect("logo colour"))
             .absolute(0.0, 0.0),
     );
     mark
 }
-pub(super) fn profile_avatar(name: &str, p: Palette) -> El {
+
+fn profile_avatar(name: &str, p: Palette, size: f32) -> El {
     let initial = name
         .chars()
         .next()
@@ -747,8 +758,8 @@ pub(super) fn profile_avatar(name: &str, p: Palette) -> El {
         .to_uppercase()
         .to_string();
     col()
-        .size(28.0, 28.0)
-        .radius(14.0)
+        .size(size, size)
+        .radius(size / 2.0)
         .fill(p.chip)
         .center()
         .child(roles::NAME.line(initial, p.ink))
@@ -783,29 +794,39 @@ fn profile(s: &State, p: Palette, wide: bool, layer: &mut Vec<El>) -> El {
             status.as_str(),
             "Ready" | "Recording" | "Checking" | "Dictating"
         ) && !s.hex_recording();
-    let avatar = || {
-        let mut avatar = profile_avatar(name, p);
+    let avatar = |size, dot_size| {
+        let mut avatar = profile_avatar(name, p, size);
         if attention {
-            avatar = avatar.child(dot(7.0, p.warn).absolute(21.0, 0.0));
+            avatar = avatar.child(dot(dot_size, p.warn).absolute(size - dot_size, 0.0));
         }
         avatar
     };
-    let mut trigger = row().w_full().gap(8.0).items_center().child(avatar());
+    let mut trigger = row()
+        .w_full()
+        .h(40.0)
+        .px(PAD)
+        .gap(10.0)
+        .items_center()
+        .child(avatar(24.0, SIGNAL_D));
     if wide {
         trigger = trigger
-            .child(roles::CONTROL.line(name, p.ink).grow(1.0))
-            .child(super::icons::draw(
-                &super::icons::CHEVRONS_UP_DOWN,
-                16.0,
-                p.soft,
+            .child(roles::NAV.line(name, p.ink).grow(1.0))
+            .child(icons::draw(
+                &icons::CHEVRONS_UP_DOWN,
+                icons::INLINE,
+                p.faint,
             ));
     }
-    let trigger = pressable(trigger.padding(6.0))
-        .key("profile-button")
-        .label("Profile and settings")
-        .radius(8.0)
-        .hover(p.chip)
-        .on_press(|s: &mut State| s.nav.profile_menu = !s.nav.profile_menu);
+    let trigger = menu_trigger(
+        pressable(trigger)
+            .key("profile-button")
+            .label("Profile and settings")
+            .radius(7.0)
+            .hover(p.chip),
+        s.nav.profile_menu,
+        p,
+        |s| s.nav.profile_menu = !s.nav.profile_menu,
+    );
     let sync = s.last_updated.map(|at| {
         let minutes = at.elapsed().as_secs() / 60;
         if minutes == 0 {
@@ -823,39 +844,26 @@ fn profile(s: &State, p: Palette, wide: bool, layer: &mut Vec<El>) -> El {
                 .unwrap_or_default()
         );
         let mut menu = col()
-            .key("profile-menu-menu")
-            .role("menu")
-            .label("Profile menu")
-            .focus_group()
-            .w(WIDE - 2.0 * PAD)
-            .padding(6.0)
-            .gap(2.0)
-            .fill(p.card)
-            .border(1.0, p.line)
-            .radius(8.0)
-            .shadow(4.0, 16.0, p.shadow)
             .child(
                 row()
-                    .h(MAIN_H)
-                    .px(PAD)
+                    .h(40.0)
+                    .px(8.0)
                     .gap(10.0)
                     .items_center()
-                    .child(avatar())
+                    .child(avatar(24.0, SIGNAL_D))
                     .child(
-                        roles::NAME
-                            .line(name, p.ink)
-                            .key("profile-menu-name")
-                            .grow(1.0),
+                        col()
+                            .grow(1.0)
+                            .shrink()
+                            .child(roles::NAV.line(name, p.ink).key("profile-menu-name"))
+                            .child(
+                                roles::META
+                                    .line(device_line, p.faint)
+                                    .key("profile-menu-device"),
+                            ),
                     ),
             )
-            .child(
-                roles::SMALL
-                    .wrap(device_line, p.soft)
-                    .max_lines(2)
-                    .key("profile-menu-device")
-                    .px(PAD)
-                    .pb(8.0),
-            );
+            .child(menu_separator(p));
         if update_ready {
             menu = menu.child(profile_item(
                 "Update ready",
@@ -885,7 +893,7 @@ fn profile(s: &State, p: Palette, wide: bool, layer: &mut Vec<El>) -> El {
                 },
             ));
         }
-        menu = menu
+        let menu = menu
             .child(profile_item(
                 "Prompt library",
                 "profile-menu-item2",
@@ -909,26 +917,29 @@ fn profile(s: &State, p: Palette, wide: bool, layer: &mut Vec<El>) -> El {
                     s.hex.section = super::hex::Section::Shortcuts;
                 },
             ))
+            .child(menu_separator(p))
             .child(
-                profile_item(
-                    "Settings",
-                    "profile-menu-item4",
-                    &super::icons::SETTINGS,
-                    p,
-                    |s| {
+                menu_row("Settings", p, None, Some(&icons::SETTINGS), Some("Ctrl+,"))
+                    .key("profile-menu-item4")
+                    .help("Settings")
+                    .on_press(|s: &mut State| {
                         s.nav.profile_menu = false;
                         s.open_hex();
-                    },
-                )
-                .child(roles::META.line("Ctrl+,", p.soft)),
+                    }),
             );
-        layer.push(rune_kit::scrim("profile-menu-scrim", |s: &mut State| {
-            s.nav.profile_menu = false
-        }));
-        layer.push(
-            menu.anchored_fit("profile-button", rune::Side::Top, rune::Align::Start, 6.0)
-                .focus_return("profile-button")
-                .modal(true, |s: &mut State| s.nav.profile_menu = false),
+        menu_surface(
+            &super::theme::kit(&p),
+            p,
+            layer,
+            menu,
+            (
+                "profile-menu",
+                "profile-button",
+                rune::Side::Top,
+                rune::Align::Start,
+                WIDE - 2.0 * PAD,
+            ),
+            |s| s.nav.profile_menu = false,
         );
     }
     trigger
@@ -941,24 +952,10 @@ fn profile_item(
     p: Palette,
     action: impl Fn(&mut State) + 'static,
 ) -> El {
-    pressable(
-        row()
-            .w_full()
-            .h(MAIN_H)
-            .px(PAD)
-            .gap(10.0)
-            .items_center()
-            .child(super::icons::draw(icon, 18.0, p.soft))
-            .child(roles::NAV.line(name, p.soft).grow(1.0)),
-    )
-    .key(key.to_string())
-    .role("menuitem")
-    .label(name.to_string())
-    .help(name.to_string())
-    .radius(6.0)
-    .hover(p.chip)
-    .focus_ring(1.0, 0.0, p.soft)
-    .on_press(action)
+    menu_row(name, p, None, Some(icon), None)
+        .key(key)
+        .help(name)
+        .on_press(action)
 }
 
 pub fn meetings_home(s: &State) -> bool {
@@ -966,4 +963,52 @@ pub fn meetings_home(s: &State) -> bool {
         && s.selected.is_none()
         && !s.on_live()
         && !matches!(s.filter, Filter::Area(_) | Filter::Areas)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn profile_menu_accepts_enter_arrows_and_escape() {
+        use rune::Key::{Down, Enter, Escape, Tab, Up};
+        use rune::{Env, Runtime};
+        crate::test_paths::isolate();
+        let view = |s: &State, _: &mut rune::Cx<State>| {
+            let mut layer = Vec::new();
+            let trigger = profile(s, super::super::theme::palette(true), true, &mut layer);
+            col().child(trigger).children(layer)
+        };
+        let mut rt = Runtime::new(State::new(), view, (400.0, 600.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+        let keys = [Tab, Enter, Down, Down, Up, Escape];
+        let [trigger, opened, first, next, back, closed] = keys.map(|key| {
+            rt.key(key.into());
+            rt.frame(0.016);
+            rt.elements().into_iter().find(|e| e.focused).unwrap()
+        });
+        assert_eq!(trigger.key.as_deref(), Some("profile-button"));
+        assert_eq!(opened.role, "menuitem");
+        assert_ne!(first.key, next.key);
+        assert_eq!(first.key, back.key);
+        assert_eq!(closed.key, trigger.key);
+        assert!(!rt.state.nav.profile_menu);
+    }
+
+    #[test]
+    fn home_sidebar_has_the_approved_dimensions_and_place_order() {
+        crate::test_paths::isolate();
+        let mut s = State::new();
+        s.config.features.tasks = true;
+        s.config.features.memory = true;
+        s.config.features.daily_check = true;
+
+        let (places, _) = places(&s, super::super::theme::palette(true));
+        let names: Vec<_> = places.iter().map(|place| place.name).collect();
+        let expected = "Meetings, Tasks, People, Memory, Diary, Annotations";
+        assert_eq!(
+            (MAIN_H, WIDE, names.join(", ").as_str()),
+            (32.0, 240.0, expected)
+        );
+    }
 }
