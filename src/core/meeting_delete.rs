@@ -460,6 +460,16 @@ pub struct Receipt {
 
 type Suppression = BTreeMap<String, String>;
 
+static VISIBILITY: std::sync::RwLock<u64> = std::sync::RwLock::new(0);
+
+/// Keep the read guard through accepting an Ask event so a deletion cannot interleave
+/// with publishing its answer.
+pub fn read_visibility() -> std::sync::RwLockReadGuard<'static, u64> {
+    VISIBILITY
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 fn suppression_path(state: &Path) -> PathBuf {
     state.join("local/deleted-meeting-ids.json")
 }
@@ -738,12 +748,16 @@ impl Storage {
         receipt: &Receipt,
         checkpoint: &mut impl FnMut(MoveEvent) -> io::Result<()>,
     ) -> io::Result<()> {
+        let mut visibility = VISIBILITY
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         store_io::atomic_write_checked(
             &suppression_path(&self.state),
             &self.suppression_bytes(receipt)?,
             |stage| checkpoint(MoveEvent::Suppression(stage)),
         )?;
         if receipt.phase == Phase::Deleting {
+            *visibility = visibility.wrapping_add(1);
             super::sync_state::settle_fence();
         }
         Ok(())
@@ -865,9 +879,13 @@ impl Storage {
         let prior = ids.len();
         ids.retain(|_, owner| owner != &receipt.transaction);
         if ids.len() != prior {
+            let mut visibility = VISIBILITY
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             store_io::atomic_write_checked(&path, &Self::bounded(&ids)?, |stage| {
                 checkpoint(MoveEvent::Unhide(stage))
             })?;
+            *visibility = visibility.wrapping_add(1);
             super::sync_state::settle_fence();
         }
         checkpoint(MoveEvent::Unhidden)

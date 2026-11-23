@@ -2442,3 +2442,128 @@ fn a_joined_meeting_shows_its_own_summarys_word() {
         stamped_summary(&joined, Some(english));
     }));
 }
+
+#[test]
+fn deletion_cancels_delayed_ask_text_and_answers_in_all_scopes() {
+    if in_parent("deletion_cancels_delayed_ask_text_and_answers_in_all_scopes") {
+        return;
+    }
+    use core::meeting_delete::{Eligibility, Storage, read_visibility, suppressed_ids};
+
+    let mut rt = page();
+    let state = &mut rt.state;
+    let folder = core::meetings_dir().join(MEETING);
+    std::fs::write(folder.join("manifest.json"), br#"{"status":"complete"}"#).unwrap();
+    let store = Storage::new(&core::meetings_dir(), &state.store.root).unwrap();
+    state.meetings[0].summary.people = vec!["Synthetic Person".into()];
+    state.companies.data.catalog.records.insert(
+        "fixture".into(),
+        core::companies::Company {
+            id: "fixture".into(),
+            name: "Synthetic company".into(),
+            ..Default::default()
+        },
+    );
+    state.companies.data.catalog.people.insert(
+        core::people::key("Synthetic Person"),
+        core::companies::PersonLink {
+            company_id: Some("fixture".into()),
+            ..Default::default()
+        },
+    );
+    for scope in 0..3 {
+        state.selected = (scope == 0).then(|| MEETING.to_owned());
+        state.companies.open = scope == 2;
+        state.companies.selected = (scope == 2).then(|| "fixture".to_owned());
+        let id = state.ask_key();
+        assert!(
+            state
+                .all_context(&Default::default())
+                .text
+                .contains(CONTEXT)
+        );
+        for first in [
+            AskProgress::Text {
+                text: "Late text".into(),
+            },
+            AskProgress::Finished,
+        ] {
+            let mut run = AskRun::stand_in("fixture", &[], 0);
+            run.live = true;
+            run.visibility = *read_visibility();
+            let cancel = run.cancel.clone();
+            let (tx, rx) = mpsc::channel();
+            tx.send(Ok("Late answer".into())).unwrap();
+            run.rx = rx;
+            state.asks.insert(id.clone(), run);
+
+            let receipt = store
+                .delete(
+                    MEETING,
+                    "Synthetic".into(),
+                    1,
+                    |_| Ok(Eligibility::Ready),
+                    |_| Ok(()),
+                )
+                .unwrap();
+            state.apply_event(Event::Progress {
+                id: id.clone(),
+                generation: 0,
+                event: first,
+            });
+            assert!(cancel.stopped());
+            assert!(!state.asks.contains_key(&id));
+            state.apply_event(Event::Progress {
+                id: id.clone(),
+                generation: 0,
+                event: AskProgress::Finished,
+            });
+            assert!(state.store.load(&id).unwrap().messages.is_empty());
+            let suppressed = suppressed_ids(&state.store.root).unwrap();
+            assert!(!state.all_context(&suppressed).text.contains(CONTEXT));
+            store.restore(&receipt).unwrap();
+        }
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn suppression_failure_during_ui_apply_retries_unchanged_catalog() {
+    if in_parent("suppression_failure_during_ui_apply_retries_unchanged_catalog") {
+        return;
+    }
+    use std::{os::windows::fs::OpenOptionsExt, sync::atomic::Ordering};
+
+    let mut rt = page();
+    let state = &mut rt.state;
+    let path = state.store.root.join("local/deleted-meeting-ids.json");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, b"{}").unwrap();
+    state.config.features.memory = false;
+    state.config.features.daily_check = false;
+    let options = state.refresh_options();
+    let snapshot = || {
+        Event::Refreshed(refresh::Result {
+            generation: core::mutation_generation(),
+            options,
+            data: Some(Box::new(refresh::Data::read(options))),
+        })
+    };
+    let (handle, dirty) = refresh::observing_handle();
+    state.scan_tx = Some(handle);
+    let ready = snapshot();
+    let before = refresh::metadata();
+    let held = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .share_mode(0)
+        .open(&path)
+        .unwrap();
+    state.apply_event(ready);
+    assert!(state.meetings.is_empty());
+    assert!(dirty.load(Ordering::Acquire));
+    drop(held);
+    assert!(before == refresh::metadata());
+    state.apply_event(snapshot());
+    assert_eq!(state.meetings[0].id, MEETING);
+}
