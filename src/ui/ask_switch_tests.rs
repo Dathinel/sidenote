@@ -2448,7 +2448,13 @@ fn deletion_cancels_delayed_ask_text_and_answers_in_all_scopes() {
     if in_parent("deletion_cancels_delayed_ask_text_and_answers_in_all_scopes") {
         return;
     }
-    use core::meeting_delete::{Eligibility, Storage, read_visibility, suppressed_ids};
+    use sidenote::core::{
+        meeting_delete::{
+            DeleteError, Eligibility, MoveEvent, Phase, Storage, WriteStage, read_visibility,
+            suppressed_ids,
+        },
+        memory::MemoryStore,
+    };
 
     let mut rt = page();
     let state = &mut rt.state;
@@ -2471,7 +2477,21 @@ fn deletion_cancels_delayed_ask_text_and_answers_in_all_scopes() {
             ..Default::default()
         },
     );
+    let memory = MemoryStore::new(state.store.root.clone());
+    const MEMORY: &str = "Synthetic saved claim";
+    let mut proposal: core::memory::MemoryProposal = serde_json::from_value(serde_json::json!({
+        "op":"add", "text":MEMORY, "rationale":"Synthetic source",
+        "sources":[{"type":"meeting", "reference":format!("[[{MEETING}@00:01]]")}]
+    }))
+    .unwrap();
+    proposal.id = core::memory::proposal_id(&proposal);
+    memory
+        .stage_proposals(std::slice::from_ref(&proposal))
+        .unwrap();
+    memory.accept_proposal(&proposal.id).unwrap();
+    state.memory.records = memory.load().unwrap().records;
     for scope in 0..3 {
+        state.memory_open = scope == 1;
         state.selected = (scope == 0).then(|| MEETING.to_owned());
         state.companies.open = scope == 2;
         state.companies.selected = (scope == 2).then(|| "fixture".to_owned());
@@ -2482,6 +2502,9 @@ fn deletion_cancels_delayed_ask_text_and_answers_in_all_scopes() {
                 .text
                 .contains(CONTEXT)
         );
+        if state.memory_open {
+            assert!(state.all_context(&Default::default()).text.contains(MEMORY));
+        }
         for first in [
             AskProgress::Text {
                 text: "Late text".into(),
@@ -2497,15 +2520,34 @@ fn deletion_cancels_delayed_ask_text_and_answers_in_all_scopes() {
             run.rx = rx;
             state.asks.insert(id.clone(), run);
 
-            let receipt = store
-                .delete(
-                    MEETING,
-                    "Synthetic".into(),
-                    1,
-                    |_| Ok(Eligibility::Ready),
-                    |_| Ok(()),
-                )
-                .unwrap();
+            let fail_after_publish = matches!(&first, AskProgress::Finished);
+            let prior = core::mutation_generation();
+            let result = store.delete(
+                MEETING,
+                "Synthetic".into(),
+                1,
+                |_| Ok(Eligibility::Ready),
+                |event| {
+                    if fail_after_publish && event == MoveEvent::Suppression(WriteStage::Published)
+                    {
+                        Err(std::io::Error::other("post-publication failure"))
+                    } else {
+                        Ok(())
+                    }
+                },
+            );
+            let receipt = match result {
+                Ok(id) if !fail_after_publish => id,
+                Err(DeleteError::Partial {
+                    transaction,
+                    source,
+                }) if fail_after_publish => {
+                    assert_eq!(source.to_string(), "post-publication failure");
+                    transaction
+                }
+                _ => panic!("unexpected deletion result"),
+            };
+            assert_ne!(core::mutation_generation(), prior);
             state.apply_event(Event::Progress {
                 id: id.clone(),
                 generation: 0,
@@ -2520,8 +2562,17 @@ fn deletion_cancels_delayed_ask_text_and_answers_in_all_scopes() {
             });
             assert!(state.store.load(&id).unwrap().messages.is_empty());
             let suppressed = suppressed_ids(&state.store.root).unwrap();
-            assert!(!state.all_context(&suppressed).text.contains(CONTEXT));
+            assert!(suppressed.contains(MEETING));
+            let context = state.all_context(&suppressed).text;
+            assert!(!context.contains(CONTEXT));
+            assert!(!context.contains(MEMORY));
+            assert_eq!(memory.load().unwrap().records.len(), 1);
+            assert_eq!(store.recover(&receipt).unwrap(), Phase::Deleted);
             store.restore(&receipt).unwrap();
+            if state.memory_open {
+                let visible = suppressed_ids(&state.store.root).unwrap();
+                assert!(state.all_context(&visible).text.contains(MEMORY));
+            }
         }
     }
 }

@@ -748,19 +748,18 @@ impl Storage {
         receipt: &Receipt,
         checkpoint: &mut impl FnMut(MoveEvent) -> io::Result<()>,
     ) -> io::Result<()> {
+        let bytes = self.suppression_bytes(receipt)?;
         let mut visibility = VISIBILITY
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        store_io::atomic_write_checked(
-            &suppression_path(&self.state),
-            &self.suppression_bytes(receipt)?,
-            |stage| checkpoint(MoveEvent::Suppression(stage)),
-        )?;
+        // Replacement can expose the tombstone before a later flush reports an error.
         if receipt.phase == Phase::Deleting {
             *visibility = visibility.wrapping_add(1);
             super::sync_state::settle_fence();
         }
-        Ok(())
+        store_io::atomic_write_checked(&suppression_path(&self.state), &bytes, |stage| {
+            checkpoint(MoveEvent::Suppression(stage))
+        })
     }
 
     fn recycled(dir: &Path, index: usize) -> PathBuf {

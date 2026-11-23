@@ -1123,7 +1123,13 @@ impl State {
                 .memory
                 .records
                 .iter()
-                .filter(|r| r.status == core::memory::RecordStatus::Active)
+                .filter(|r| {
+                    r.status == core::memory::RecordStatus::Active
+                        && !r.sources.iter().any(|source| matches!(
+                            source, core::memory::MemorySource::Meeting { reference }
+                                if core::recording_guard::source_suppressed(reference, suppressed)
+                        ))
+                })
                 .collect();
             let json = serde_json::to_string(&records).unwrap_or_default();
             let limit = core::ask_all::CONTEXT_CAP / 2;
