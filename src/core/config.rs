@@ -1,5 +1,5 @@
 //! Device-local user choices. Only state/** is synchronized.
-use super::{StateStore, TaskStore, memory::MemoryStore, state_dir, store_io};
+use super::{CHANNEL, Channel, StateStore, TaskStore, memory::MemoryStore, state_dir, store_io};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, io, path::Path, sync::Mutex, time::Instant};
 
@@ -64,41 +64,118 @@ pub(super) fn lock(root: &Path) -> io::Result<std::fs::File> {
     )
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Capability {
+    StableWindows,
+    Experimental,
+    Hidden,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Feature {
+    Recording,
+    Transcript,
+    Notes,
     Tasks,
+    Ask,
+    Search,
+    MeetingIcon,
+    Settings,
+    Delete,
+    People,
     Memory,
     DailyCheck,
     Projects,
+    Annotations,
+    IndicEngine,
+    Translation,
+    Performance,
+    AttendeeDiscovery,
     OtherDevices,
+    Sync,
+    Relay,
+    Server,
+    ExternalMcp,
 }
 
 impl Feature {
-    pub const ALL: [Self; 5] = [
-        Self::Tasks,
-        Self::Memory,
-        Self::DailyCheck,
+    pub const EXPERIMENTAL: [Self; 6] = [
+        Self::People,
         Self::Projects,
-        Self::OtherDevices,
+        Self::Memory,
+        Self::Annotations,
+        Self::IndicEngine,
+        Self::Translation,
     ];
+
+    pub const fn capability(self) -> Capability {
+        match self {
+            Self::Recording
+            | Self::Transcript
+            | Self::Notes
+            | Self::Tasks
+            | Self::Ask
+            | Self::Search
+            | Self::MeetingIcon
+            | Self::Settings
+            | Self::Delete => Capability::StableWindows,
+            Self::People
+            | Self::Projects
+            | Self::Memory
+            | Self::Annotations
+            | Self::IndicEngine
+            | Self::Translation => Capability::Experimental,
+            Self::DailyCheck
+            | Self::Performance
+            | Self::AttendeeDiscovery
+            | Self::OtherDevices
+            | Self::Sync
+            | Self::Relay
+            | Self::Server
+            | Self::ExternalMcp => Capability::Hidden,
+        }
+    }
 
     pub fn name(self) -> &'static str {
         match self {
+            Self::Recording => "Recording and live view",
+            Self::Transcript => "Transcript",
+            Self::Notes => "Summary and typed notes",
             Self::Tasks => "Tasks",
+            Self::Ask => "Ask",
+            Self::Search => "Search",
+            Self::MeetingIcon => "Meeting icon",
+            Self::Settings => "Settings",
+            Self::Delete => "Delete",
+            Self::People => "People",
             Self::Memory => "Memory",
             Self::DailyCheck => "Daily check",
             Self::Projects => "Projects",
+            Self::Annotations => "Annotations and pictures",
+            Self::IndicEngine => "Hindi and Telugu engine",
+            Self::Translation => "Translation",
+            Self::Performance => "Performance",
+            Self::AttendeeDiscovery => "Attendee discovery",
             Self::OtherDevices => "Other devices",
+            Self::Sync => "Sync",
+            Self::Relay => "Relay",
+            Self::Server => "Server mode",
+            Self::ExternalMcp => "External MCP",
         }
     }
 
     pub fn description(self) -> &'static str {
         match self {
             Self::Tasks => "See all tasks in one place and their count in the sidebar.",
+            Self::People => "Browse people and their meeting history.",
             Self::Memory => "Review memory, proposals and memory badges.",
             Self::DailyCheck => "Build memory each day and review the alignment report.",
             Self::Projects => "Group meetings with project chips and sidebar filters.",
+            Self::Annotations => "Attach notes and pictures to moments in a meeting.",
+            Self::IndicEngine => "Use configured Hindi and Telugu transcription models.",
+            Self::Translation => "Use the configured translation step before writing notes.",
             Self::OtherDevices => "Show the Devices section in the sidebar.",
+            _ => "",
         }
     }
 
@@ -113,19 +190,55 @@ impl Feature {
     }
 }
 
-#[derive(Clone, Default, Serialize, Deserialize)]
-#[serde(default)]
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(default = "Features::legacy")]
 pub struct Features {
     pub tasks: bool,
     pub memory: bool,
     pub daily_check: bool,
     pub projects: bool,
     pub other_devices: bool,
+    pub people: bool,
+    pub annotations: bool,
+    pub indic_engine: bool,
+    pub translation: bool,
     #[serde(flatten)]
     extra: BTreeMap<String, serde_json::Value>,
 }
 
+impl Default for Features {
+    fn default() -> Self {
+        let experimental = CHANNEL == Channel::Nightly;
+        Self {
+            tasks: true,
+            memory: experimental,
+            daily_check: false,
+            projects: experimental,
+            other_devices: false,
+            people: experimental,
+            annotations: experimental,
+            indic_engine: experimental,
+            translation: experimental,
+            extra: BTreeMap::new(),
+        }
+    }
+}
+
 impl Features {
+    fn legacy() -> Self {
+        // Existing configs retain the paths that had no product-level switch.
+        Self {
+            tasks: false,
+            memory: false,
+            projects: false,
+            people: true,
+            annotations: true,
+            indic_engine: true,
+            translation: true,
+            ..Self::default()
+        }
+    }
+
     pub fn enabled(&self, feature: Feature) -> bool {
         match feature {
             Feature::Tasks => self.tasks,
@@ -133,6 +246,11 @@ impl Features {
             Feature::DailyCheck => self.daily_check,
             Feature::Projects => self.projects,
             Feature::OtherDevices => self.other_devices,
+            Feature::People => self.people,
+            Feature::Annotations => self.annotations,
+            Feature::IndicEngine => self.indic_engine,
+            Feature::Translation => self.translation,
+            _ => feature.capability() == Capability::StableWindows && cfg!(windows),
         }
     }
 
@@ -143,6 +261,11 @@ impl Features {
             Feature::DailyCheck => &mut self.daily_check,
             Feature::Projects => &mut self.projects,
             Feature::OtherDevices => &mut self.other_devices,
+            Feature::People => &mut self.people,
+            Feature::Annotations => &mut self.annotations,
+            Feature::IndicEngine => &mut self.indic_engine,
+            Feature::Translation => &mut self.translation,
+            _ => return,
         };
         *slot = !*slot;
     }
@@ -289,6 +412,13 @@ impl Config {
     }
 
     pub fn load_in(root: &Path) -> io::Result<Self> {
+        Self::load_with_scan(root, super::scan)
+    }
+
+    fn load_with_scan(
+        root: &Path,
+        scan: impl FnOnce() -> (Vec<super::Meeting>, Vec<String>),
+    ) -> io::Result<Self> {
         let mut config = Self::read_config(root)?;
         if config.as_ref().is_none_or(|c| c.notes.is_none()) {
             #[cfg(all(test, windows))]
@@ -299,7 +429,11 @@ impl Config {
             if config.as_ref().is_none_or(|c| c.notes.is_none()) {
                 let mut migrated = match config {
                     Some(config) => config,
-                    None => operation(Self::migrate(root), "migration_read", "legacy_settings")?,
+                    None => operation(
+                        Self::migrate(root, scan()),
+                        "migration_read",
+                        "legacy_settings",
+                    )?,
                 };
                 if migrated.notes.is_none() {
                     migrated.notes = Some(super::notes::migrated_settings(
@@ -477,8 +611,10 @@ impl Config {
         Ok(())
     }
 
-    fn migrate(root: &Path) -> io::Result<Self> {
-        let (meetings, errors) = super::scan();
+    fn migrate(
+        root: &Path,
+        (meetings, errors): (Vec<super::Meeting>, Vec<String>),
+    ) -> io::Result<Self> {
         if !errors.is_empty() {
             return Err(store_io::invalid(
                 "Could not inspect meetings for feature migration",
@@ -533,16 +669,14 @@ impl Config {
                 &super::live::notes_pipeline(),
             )),
             features: Features {
-                tasks: !tasks.is_empty()
-                    || !overrides.tasks.is_empty()
-                    || !overrides.manual.is_empty()
-                    || checked.values().any(|v| !v.is_empty()),
-                memory: report_proposals
+                memory: CHANNEL == Channel::Nightly
+                    || report_proposals
                     || !records.records.is_empty()
                     || !records.proposals.is_empty()
                     || !memory.legacy_text()?.trim().is_empty(),
                 daily_check,
-                projects: !projects.projects.is_empty()
+                projects: CHANNEL == Channel::Nightly
+                    || !projects.projects.is_empty()
                     || !projects.aliases.is_empty()
                     || tasks.iter().any(|t| t.project != super::UNSORTED),
                 other_devices: meetings.iter().any(|m| m.device.is_some()),
@@ -648,6 +782,75 @@ pub(super) fn merge_edits(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn fresh_install_persists_its_channel_defaults() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let installed = Config::load_with_scan(root, || {
+            super::super::scan_catalog(root, &root.join("meetings"), &root.join("peers"))
+        })
+        .unwrap();
+        let reopened = Config::load_in(root).unwrap();
+        for config in [installed, reopened] {
+            assert!(config.features.tasks);
+            for feature in Feature::EXPERIMENTAL {
+                assert_eq!(feature.capability(), Capability::Experimental);
+                assert_eq!(
+                    config.features.enabled(feature),
+                    CHANNEL == Channel::Nightly,
+                    "{feature:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn existing_feature_choices_and_data_survive_a_toggle_and_reload() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let path = root.join("config.json");
+        store_io::write(
+            &path,
+            &json!({
+                "version": 1,
+                "features": {"tasks": false, "projects": false, "memory": true, "future": 42},
+                "notes": {},
+                "future_root": {"value": true}
+            }),
+        )
+        .unwrap();
+        let memory = MemoryStore::new(root.to_owned());
+        super::super::sync_state::save_changes(
+            root,
+            "memory/legacy.json",
+            &json!({}),
+            &json!({"documents": {"example": "Example saved memory"}}),
+        )
+        .unwrap();
+
+        let mut config = Config::load_in(root).unwrap();
+        assert!(!config.features.tasks && !config.features.projects);
+        assert!(config.features.memory);
+        for feature in [
+            Feature::People,
+            Feature::Annotations,
+            Feature::IndicEngine,
+            Feature::Translation,
+        ] {
+            assert!(config.features.enabled(feature));
+        }
+        config.features.toggle(Feature::Memory);
+        config.save(root).unwrap();
+
+        let saved = Config::load_in(root).unwrap();
+        assert!(!saved.features.memory && !saved.features.tasks && !saved.features.projects);
+        let raw: serde_json::Value = serde_json::from_slice(&read(root).unwrap()).unwrap();
+        assert_eq!(raw["features"]["memory"], false);
+        assert_eq!(raw["features"]["future"], 42);
+        assert_eq!(raw["future_root"]["value"], true);
+        assert_eq!(memory.legacy_text().unwrap(), "Example saved memory");
+    }
 
     #[test]
     fn relay_busy_reports_once_after_bound_and_resets() {
@@ -800,6 +1003,10 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let initial = Config {
             notes: Some(super::super::notes::NotesSettings::default()),
+            features: Features {
+                tasks: false,
+                ..Features::default()
+            },
             ..Config::default()
         };
         store_io::write(&root.path().join("config.json"), &initial).unwrap();

@@ -65,6 +65,7 @@ hyper-util = { version = "0.1", default-features = false, features = ["tokio", "
 rmcp = { version = "=3.9.0", default-features = false, features = ["transport-streamable-http-server"] }
 
 [features]
+nightly = []
 asr-runtime = ["dep:ort", "dep:kaldi-fbank"]
 # Isolated recorder qualification with mocked scheduled-task cmdlets.
 recorder-ready-proof = []
