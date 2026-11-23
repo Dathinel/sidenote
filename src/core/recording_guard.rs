@@ -223,17 +223,30 @@ pub fn hidden(root: &Path, folder: &Path, id: &str) -> bool {
         Err(_) => true,
     }
 }
+static CITATION: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\[\[([0-9-]+)(?:@|\]\])").unwrap());
+
+pub fn source_suppressed(source: &str, suppressed: &std::collections::BTreeSet<String>) -> bool {
+    CITATION
+        .captures_iter(source)
+        .any(|citation| suppressed.contains(&citation[1]))
+}
+
 pub fn sources_visible<'a>(
     root: &Path,
     meetings: &Path,
     sources: impl IntoIterator<Item = &'a str>,
 ) -> bool {
-    static CITATION: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"\[\[([0-9]+-[0-9-]+)(?:@|\]\])").unwrap());
+    let suppressed = std::cell::OnceCell::new();
     sources.into_iter().all(|source| {
-        CITATION
-            .captures_iter(source)
-            .all(|c| !hidden(root, &meetings.join(&c[1]), &c[1]))
+        CITATION.captures_iter(source).all(|citation| {
+            let id = &citation[1];
+            suppressed
+                .get_or_init(|| super::meeting_delete::suppressed_ids(root))
+                .as_ref()
+                .is_ok_and(|ids| !ids.contains(id))
+                && !hidden(root, &meetings.join(id), id)
+        })
     })
 }
 #[derive(Clone)]

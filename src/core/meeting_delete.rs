@@ -460,6 +460,16 @@ pub struct Receipt {
 
 type Suppression = BTreeMap<String, String>;
 
+static VISIBILITY: std::sync::RwLock<u64> = std::sync::RwLock::new(0);
+
+/// Keep the read guard through accepting an Ask event so a deletion cannot interleave
+/// with publishing its answer.
+pub fn read_visibility() -> std::sync::RwLockReadGuard<'static, u64> {
+    VISIBILITY
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 fn suppression_path(state: &Path) -> PathBuf {
     state.join("local/deleted-meeting-ids.json")
 }
@@ -474,7 +484,10 @@ fn read_suppression(state: &Path) -> io::Result<Suppression> {
 }
 
 pub fn suppressed_ids(state: &Path) -> io::Result<BTreeSet<String>> {
-    Ok(read_suppression(state)?.into_keys().collect())
+    let ids = read_suppression(state).inspect_err(|error| {
+        file_reads::error(&suppression_path(state), error);
+    })?;
+    Ok(ids.into_keys().collect())
 }
 
 /// A writer must keep the returned claim until its last publication.
@@ -735,11 +748,18 @@ impl Storage {
         receipt: &Receipt,
         checkpoint: &mut impl FnMut(MoveEvent) -> io::Result<()>,
     ) -> io::Result<()> {
-        store_io::atomic_write_checked(
-            &suppression_path(&self.state),
-            &self.suppression_bytes(receipt)?,
-            |stage| checkpoint(MoveEvent::Suppression(stage)),
-        )
+        let bytes = self.suppression_bytes(receipt)?;
+        let mut visibility = VISIBILITY
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Replacement can expose the tombstone before a later flush reports an error.
+        if receipt.phase == Phase::Deleting {
+            *visibility = visibility.wrapping_add(1);
+            super::sync_state::settle_fence();
+        }
+        store_io::atomic_write_checked(&suppression_path(&self.state), &bytes, |stage| {
+            checkpoint(MoveEvent::Suppression(stage))
+        })
     }
 
     fn recycled(dir: &Path, index: usize) -> PathBuf {
@@ -855,10 +875,18 @@ impl Storage {
     ) -> io::Result<()> {
         let path = suppression_path(&self.state);
         let mut ids = read_suppression(&self.state)?;
+        let prior = ids.len();
         ids.retain(|_, owner| owner != &receipt.transaction);
-        store_io::atomic_write_checked(&path, &Self::bounded(&ids)?, |stage| {
-            checkpoint(MoveEvent::Unhide(stage))
-        })?;
+        if ids.len() != prior {
+            let mut visibility = VISIBILITY
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            store_io::atomic_write_checked(&path, &Self::bounded(&ids)?, |stage| {
+                checkpoint(MoveEvent::Unhide(stage))
+            })?;
+            *visibility = visibility.wrapping_add(1);
+            super::sync_state::settle_fence();
+        }
         checkpoint(MoveEvent::Unhidden)
     }
 
