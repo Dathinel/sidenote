@@ -1761,6 +1761,8 @@ fn stopping_view(s: &State, p: Palette, narrow: bool, timed_out: bool) -> El {
         .child(roles::READ.wrap(status, p.soft).role("status"))
         .children(timed_out.then(|| {
             quiet_button("Check again", "live-stop-recheck", p)
+                .self_start()
+                .px(0.0)
                 .on_press(|s: &mut State| s.hex_recheck_stop())
         }))
         .children((!s.live_notes.text.trim().is_empty()).then(|| your_notes(&s.live_notes.text, p)))
