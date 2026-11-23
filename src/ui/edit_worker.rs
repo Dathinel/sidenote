@@ -681,16 +681,12 @@ impl State {
                 ..
             } => match result {
                 Ok(view) => {
-                    let saved = if let Some(item) = self
-                        .tasks
-                        .all
-                        .iter()
-                        .find(|t| t.meeting_id == row && t.index == index && !t.manual)
-                    {
+                    let opened = self.tasks.edit_item.as_ref().filter(|t| !t.manual);
+                    let saved = if let Some(item) = opened {
                         serde_json::to_value(view.value.match_task(
                             &row,
                             &item.stable_id,
-                            &item.task,
+                            mine["task"].as_str().unwrap_or(&item.task),
                             index,
                         ))
                         .unwrap_or_default()

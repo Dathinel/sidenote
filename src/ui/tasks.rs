@@ -856,7 +856,10 @@ impl State {
         field: super::edit_worker::Field,
         change: impl FnOnce(&mut TaskOverride),
     ) {
-        if self.tasks.panel == Some(Panel::Task((id.into(), index))) {
+        if self
+            .panel_task()
+            .is_some_and(|task| task.meeting_id == id && task.index == index)
+        {
             self.save_task_edit(id, index, None, field, false, change);
             return;
         }
@@ -922,6 +925,8 @@ impl State {
             .iter()
             .find(|m| m.id == id)
             .map(|m| m.folder.clone());
+        // The open task can move in the summary without starting a new editor session.
+        self.tasks.panel = Some(Panel::Task((id.into(), index)));
         self.tasks.edit_failed = false;
         self.publish_edit(super::edit_worker::Job::Task {
             store: self.tasks.store.clone(),
@@ -4395,7 +4400,7 @@ mod tests {
         assert!(rt.find(&retry).is_none());
         assert_eq!(
             rt.state.store.load(MEETING).unwrap().checked,
-            BTreeSet::from(["Collect samples".into()])
+            BTreeSet::from(["Collect samples".into(), core::task_tick_key("first")])
         );
     }
 
@@ -4425,7 +4430,7 @@ mod tests {
         assert!(rt.find(&retry).is_none());
         assert_eq!(
             rt.state.store.load(MEETING).unwrap().checked,
-            BTreeSet::from(["Collect samples".into()])
+            BTreeSet::from(["Collect samples".into(), core::task_tick_key("first")])
         );
     }
 
@@ -4457,8 +4462,47 @@ mod tests {
         assert!(rt.find(&retry).is_none());
         assert_eq!(
             rt.state.store.load(MEETING).unwrap().checked,
-            BTreeSet::from(["Collect samples".into()])
+            BTreeSet::from(["Collect samples".into(), core::task_tick_key("first")])
         );
+    }
+
+    #[test]
+    fn reordered_task_panel_applies_title_save_and_failure() {
+        let root = tempfile::tempdir().unwrap();
+        let mut rt = stored_tasks_page(root.path());
+        tap_task_control(&mut rt, &format!("ttask-{MEETING}-0"));
+        rt.update(|s, _| {
+            let meeting = &mut s.meetings[0];
+            meeting.summary.todo.swap(0, 1);
+            fs::write(
+                meeting.folder.join("english-summary.json"),
+                serde_json::to_vec(&meeting.summary).unwrap(),
+            )
+            .unwrap();
+            s.rebuild_tasks();
+        });
+        drain_task_updates(&mut rt);
+
+        tap_task_control(&mut rt, "ptitle");
+        rt.update(|s, _| s.tasks.inputs.title = TextEdit::new("Gather samples"));
+        rt.frame(0.2);
+        let lock = block_task_store(root.path(), "task-overrides.json");
+        tap_task_control(&mut rt, "task-text-save");
+        drain_task_updates(&mut rt);
+        assert!(rt.state.tasks.edit_failed);
+        assert!(rt.find("tasks-notice-dismiss").is_some());
+
+        fs::remove_dir(lock).unwrap();
+        tap_task_control(&mut rt, "task-text-save");
+        drain_task_updates(&mut rt);
+        assert!(!rt.state.tasks.edit_failed);
+        assert!(rt.find("task-text-save").is_none());
+        assert_eq!(rt.state.tasks.edit_base["title"], "Gather samples");
+        let overrides = rt.state.tasks.store.load_overrides().unwrap();
+        let saved = overrides
+            .match_task(MEETING, "first", "Collect samples", 1)
+            .unwrap();
+        assert_eq!(saved.title.as_deref(), Some("Gather samples"));
     }
 
     #[test]
