@@ -2376,7 +2376,7 @@ fn empty_note(s: &State, p: Palette) -> El {
             button("Clear filters", "tasks-clear-filters", false, p).on_press(|s: &mut State| {
                 s.tasks.who = Who::Everyone;
                 s.tasks.include_unassigned = false;
-                s.tasks.done = DoneFilter::Open;
+                s.tasks.done = DoneFilter::All;
                 s.tasks.search = TextEdit::default();
                 s.tasks.clear_scope();
                 s.save_task_filters();
@@ -3933,6 +3933,20 @@ mod tests {
         )
     }
 
+    fn seed_manual_tasks(t: &mut TasksState, tasks: &[(&str, bool)]) {
+        t.overrides.manual = tasks
+            .iter()
+            .map(|&(id, done)| ManualTask {
+                id: id.into(),
+                task: format!("Synthetic {id} task"),
+                done,
+                ..ManualTask::default()
+            })
+            .collect();
+        t.items = core::build_tasks(&[], &t.pipeline, &t.projects, &t.overrides, &t.checked);
+        t.items_changed();
+    }
+
     #[test]
     fn empty_tasks_page_offers_to_add_a_task() {
         let mut rt = tasks_page();
@@ -3954,19 +3968,8 @@ mod tests {
     fn task_status_filter_controls_rendered_and_keyboard_rows() {
         let mut rt = tasks_page();
         rt.update(|s, _| {
-            let t = &mut s.tasks;
-            t.done_open = true;
-            t.overrides.manual = [("open", false), ("done", true)]
-                .into_iter()
-                .map(|(id, done)| ManualTask {
-                    id: id.into(),
-                    task: format!("Synthetic {id} task"),
-                    done,
-                    ..ManualTask::default()
-                })
-                .collect();
-            t.items = core::build_tasks(&[], &t.pipeline, &t.projects, &t.overrides, &t.checked);
-            t.items_changed();
+            s.tasks.done_open = true;
+            seed_manual_tasks(&mut s.tasks, &[("open", false), ("done", true)]);
         });
         for layout in [core::TasksLayout::List, core::TasksLayout::Board] {
             for (filter, open, done) in [
@@ -3986,5 +3989,30 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn clear_filters_reveals_completed_tasks_from_the_empty_open_list() {
+        let root = tempfile::tempdir().unwrap();
+        let mut rt = tasks_page();
+        rt.update(|s, _| {
+            s.store.root = root.path().to_path_buf();
+            seed_manual_tasks(&mut s.tasks, &[("done", true)]);
+        });
+        rt.frame(0.0);
+        assert!(rt.find("trow-manual/done-0").is_none());
+        let (x, y) = rt
+            .find("tasks-clear-filters")
+            .expect("clear filters button in the empty Open list");
+
+        rt.pointer_move(x, y);
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        rt.frame(0.2);
+
+        assert_eq!(rt.state.tasks.done, DoneFilter::All);
+        assert!(rt.find("trow-manual/done-0").is_some());
+        let prefs = core::UiPrefs::load(root.path());
+        assert_eq!(prefs.tasks_done, DoneFilter::All);
     }
 }
