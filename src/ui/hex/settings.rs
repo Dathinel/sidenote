@@ -3452,6 +3452,7 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
+    #[cfg(feature = "nightly")]
     fn saving_the_device_name_is_blocked_while_pairing_is_busy() {
         let root = tempfile::tempdir().unwrap();
         let mut s = State::new();
@@ -3484,6 +3485,7 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
+    #[cfg(feature = "nightly")]
     fn linux_relay_settings_refuse_enable_and_allow_local_device_rename() {
         use sidenote::core::relay_preview::Settings;
 

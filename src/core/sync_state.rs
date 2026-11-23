@@ -293,7 +293,8 @@ impl Session {
             )?)
         };
         let view = read_view(root, store, &own)?;
-        let relay_mode_lock = if !read_only
+        let relay_mode_lock = if matches!(super::CHANNEL, super::Channel::Nightly)
+            && !read_only
             && super::relay_preview::shared::domain(store).is_some()
             && root.join("local/relay/settings.json").try_exists()?
         {
