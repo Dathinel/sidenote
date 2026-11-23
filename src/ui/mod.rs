@@ -937,7 +937,18 @@ impl State {
     /// Opens the transcript at the line for `stamp`, lights it and its neighbours, and
     /// remembers where to come back to.
     pub fn jump(&mut self, stamp: &str, origin: String, tx: &mut Tx) {
-        let Some(line) = self.current().and_then(|m| m.target(stamp)) else {
+        let Some(line) = self.current().and_then(|m| {
+            let containing = m.target(stamp);
+            if stamp.contains('.') {
+                return containing;
+            }
+            // Citations can omit fractions. Prefer a line stamped with the cited second.
+            let second = core::seconds(stamp)?;
+            containing
+                .filter(|&i| m.lines[i].seconds == Some(second))
+                .or_else(|| m.lines.iter().position(|line| line.seconds == Some(second)))
+                .or(containing)
+        }) else {
             let untimed = self
                 .current()
                 .is_some_and(|m| !m.lines.is_empty() && !m.timed());
@@ -4606,4 +4617,61 @@ pub fn run() {
         }
     });
     window::configure(app).run();
+}
+
+#[cfg(test)]
+mod citation_tests {
+    use super::*;
+
+    #[test]
+    fn citations_open_and_highlight_the_transcript_line() {
+        let root = tempfile::tempdir().unwrap();
+        let id = "1700000000000-1";
+        let folder = root.path().join(id);
+        std::fs::create_dir(&folder).unwrap();
+        std::fs::write(
+            folder.join("english-transcript.md"),
+            concat!(
+                "[00:00:00.250] Maya (English): Workshop opening.\n",
+                "[00:00:19.750] You (English): Check the agenda.\n",
+                "[00:00:20.500] Maya (English): Reserve the workshop room.\n",
+                "[00:00:20.750] You (English): Invite the volunteers.\n",
+                "[00:00:34.000] Maya (English): Send the invites.\n",
+                "[00:00:34.500] You (English): Confirm the RSVP date.\n",
+            ),
+        )
+        .unwrap();
+        let mut state = State::new();
+        state.meetings.push(Meeting::load(&folder).unwrap());
+
+        for (stamp, expected) in [
+            ("00:20", 2),
+            ("00:20.750", 3),
+            ("00:34", 4),
+            ("00:00", 0),
+            ("00:40", 5),
+        ] {
+            let target = format!("{id}@{stamp}");
+            for (open, origin) in [
+                (
+                    State::open_citation as fn(&mut State, &str, String, &mut Tx),
+                    "answer",
+                ),
+                (State::open_check_citation, "daily-check"),
+            ] {
+                state.go_home();
+                open(&mut state, &target, origin.into(), &mut Tx::default());
+                assert_eq!(state.selected.as_deref(), Some(id));
+                assert!(state.transcript_open, "{origin} at {stamp}");
+                assert_eq!(state.highlight, Some(expected), "{origin} at {stamp}");
+                let pending = state.pending_scroll.as_ref().unwrap();
+                assert_eq!(
+                    pending.key,
+                    format!("line-{expected}"),
+                    "{origin} at {stamp}"
+                );
+                assert!(pending.center, "{origin} at {stamp}");
+            }
+        }
+    }
 }
