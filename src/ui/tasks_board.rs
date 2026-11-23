@@ -3,7 +3,7 @@
 //! through the same status edit the task panel uses. The page and the panel are `tasks.rs`;
 //! this file only lays the cards out. It is a child of that module, so it reads its helpers.
 use super::{
-    Panel, RowId, State, avatar, button, cards, chevron, date_chip, empty_note, owner_name,
+    Panel, RowId, State, View, avatar, button, cards, chevron, date_chip, empty_note, owner_name,
     pressable, project_dot, roles, shown_title, status_dot,
 };
 use crate::ui::{edit_worker::Job, theme::Palette};
@@ -148,26 +148,36 @@ impl State {
         self.apply_intent(id, index, MoveIntent::tick(!now));
     }
 
-    /// Draws a card that may be off the first page or in a folded Done column, opens the tab it
-    /// is under on a narrow board, and scrolls to it once it is on screen.
+    /// Queues a reveal against the next board refresh.
     pub(super) fn reveal_card(&mut self, id: &str, index: usize) {
-        if self.tasks.layout != core::TasksLayout::Board {
-            return;
+        if self.tasks.layout == core::TasksLayout::Board
+            && let Some(task) = self.tasks.item(id, index)
+        {
+            self.tasks.reveal = Some((id.to_owned(), core::diary::task_identity(task)));
+        }
+    }
+
+    fn refresh_reveal(&mut self, tx: &mut Tx) -> bool {
+        let Some((meeting, stable)) = self.tasks.reveal.as_ref() else {
+            return false;
+        };
+        let matches =
+            |t: &TaskItem| t.meeting_id == *meeting && core::diary::task_identity(t) == *stable;
+        let Some(i) = self.tasks.items.iter().position(matches) else {
+            if !self.tasks.all.iter().any(matches) {
+                self.tasks.reveal = None;
+            }
+            return false;
+        };
+        if self.view != View::Tasks || self.tasks.layout != core::TasksLayout::Board {
+            return false;
         }
         let view = self.tasks.board();
-        let Some(i) = self
-            .tasks
-            .items
-            .iter()
-            .position(|t| t.meeting_id == id && t.index == index)
-        else {
-            return;
-        };
         let Some((c, n)) = BoardColumn::ALL
             .into_iter()
             .find_map(|c| view.column(c).iter().position(|&r| r == i).map(|n| (c, n)))
         else {
-            return;
+            return false;
         };
         if c == BoardColumn::Done && view.done_folded {
             self.tasks.done_open = true;
@@ -175,7 +185,11 @@ impl State {
         let shown = &mut self.tasks.board_shown[c.index()];
         *shown = (*shown).max(first_page(c)).max(n + 1);
         self.tasks.board_tab = c;
-        self.tasks.reveal = Some((format!("trow-{id}-{index}"), 3));
+        let (id, index) = row_of(&self.tasks.items[i]);
+        tx.scroll_into_view(format!("trow-{id}-{index}"));
+        self.tasks.cursor = Some((id, index));
+        self.tasks.reveal = None;
+        true
     }
 
     /// A short polite line under the toolbar. It goes after a few seconds or the next key.
@@ -349,14 +363,7 @@ pub fn on_key(s: &mut State, e: &KeyEvent, tx: &mut Tx) -> bool {
 /// Clears the live line when its time is up, and scrolls to a card that was just revealed.
 /// Returns whether the page changed.
 pub fn live_tick(s: &mut State, tx: &mut Tx) -> bool {
-    let mut changed = false;
-    if let Some((key, left)) = s.tasks.reveal.take() {
-        tx.scroll_into_view(key.clone());
-        if left > 0 {
-            s.tasks.reveal = Some((key, left - 1));
-        }
-        changed = true;
-    }
+    let changed = s.refresh_reveal(tx);
     let Some((_, until)) = &s.tasks.board_live else {
         return changed;
     };
@@ -1191,6 +1198,72 @@ pub fn filter_row(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reveal_follows_a_task_to_its_new_due_date_page() {
+        let mut s = State::new();
+        s.view = View::Tasks;
+        s.tasks.layout = core::TasksLayout::Board;
+        s.tasks.done = core::DoneFilter::All;
+        s.tasks.who = core::Who::Everyone;
+        s.tasks.keyboard = true;
+        s.tasks.items = (0..=PAGE)
+            .map(|index| TaskItem {
+                meeting_id: "synthetic".into(),
+                meeting_title: "Test meeting".into(),
+                meeting_date: None,
+                meeting_rank: 0,
+                index,
+                task: format!("Task {index}"),
+                stable_id: format!("task-{index}"),
+                title: format!("Task {index}"),
+                description: String::new(),
+                status: Default::default(),
+                waiting_on: None,
+                waiting_label: None,
+                subtasks: Vec::new(),
+                team: String::new(),
+                owner: None,
+                due: None,
+                due_date: Some(s.tasks.today),
+                due_default: false,
+                stamp: None,
+                project: core::UNSORTED.into(),
+                area_id: None,
+                mine: None,
+                done: false,
+                edited: false,
+                manual: false,
+            })
+            .collect();
+        s.tasks.items_changed();
+        s.reveal_card("synthetic", 0);
+
+        let target = &mut s.tasks.items[0];
+        target.due_date = s.tasks.today.succ_opt();
+        target.index = PAGE + 1;
+        s.tasks.items_changed();
+        s.tasks.all = s.tasks.items.clone();
+        let expected = (String::from("synthetic"), PAGE + 1);
+        let key = format!("trow-{}-{}", expected.0, expected.1);
+
+        let mut rt = rune::Runtime::new(
+            s,
+            super::super::super::view,
+            (1334.0, 900.0),
+            rune::Env::default(),
+        );
+        rt.update(|s, tx| assert!(live_tick(s, tx)));
+        rt.settle_all();
+        rt.frame(0.0);
+        assert_eq!(
+            rt.state.tasks.board_shown[BoardColumn::Todo.index()],
+            PAGE + 1
+        );
+        assert_eq!(rt.state.tasks.cursor, Some(expected));
+        assert!(rt.state.tasks.reveal.is_none());
+        assert!(rt.find(&key).is_some());
+    }
 
     /// The cards of one page: two meetings (one with dashes in its id) and a hand-made task.
     fn exists(id: &str, index: usize) -> bool {
