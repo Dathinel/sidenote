@@ -362,7 +362,13 @@ impl Live {
                 || self.recovered.as_deref() == Some(text))
     }
 
-    fn recover_on_close(&mut self, root: &Path, text: &str) -> bool {
+    fn recover_on_close(
+        &mut self,
+        root: &Path,
+        text: &str,
+        writer_stopped: bool,
+        write_recovery: impl FnOnce(&str, &Path) -> bool + Send + 'static,
+    ) -> bool {
         // An older save can still overwrite or remove its own recovery file.
         let path = root.join("unsaved-notes").join(format!(
             "{}-close-{}-{}.md",
@@ -370,20 +376,24 @@ impl Live {
             std::process::id(),
             NEXT_CLOSE_RECOVERY.fetch_add(1, Ordering::Relaxed),
         ));
-        let (done, result) = mpsc::channel();
-        let draft = text.to_owned();
-        if thread::Builder::new()
-            .name("live-notes-recovery".into())
-            .spawn(move || {
-                let _ = done.send(feed_io::preserve_notes(None, &draft, &path));
-            })
-            .is_ok()
-            && matches!(result.recv_timeout(CLOSE_RECOVERY_WAIT), Ok(Ok(_)))
-        {
+        let recovered = if writer_stopped {
+            // A crashed writer needs a durable copy without another scheduling deadline.
+            write_recovery(text, &path)
+        } else {
+            let (done, result) = mpsc::channel();
+            let draft = text.to_owned();
+            thread::Builder::new()
+                .name("live-notes-recovery".into())
+                .spawn(move || {
+                    let _ = done.send(write_recovery(&draft, &path));
+                })
+                .is_ok()
+                && matches!(result.recv_timeout(CLOSE_RECOVERY_WAIT), Ok(true))
+        };
+        if recovered {
             self.recovered = Some(text.to_owned());
-            return true;
         }
-        false
+        recovered
     }
 
     fn needs_save(&self, text: &str) -> bool {
@@ -572,6 +582,16 @@ impl State {
     }
 
     fn live_close_after(&mut self, wait: Duration) -> bool {
+        self.live_close_after_with(wait, |text, path| {
+            feed_io::preserve_notes(None, text, path).is_ok()
+        })
+    }
+
+    fn live_close_after_with(
+        &mut self,
+        wait: Duration,
+        write_recovery: impl FnOnce(&str, &Path) -> bool + Send + 'static,
+    ) -> bool {
         if self
             .live_writer
             .as_ref()
@@ -583,13 +603,16 @@ impl State {
             .live_writer
             .as_ref()
             .is_none_or(|writer| writer.drain(wait));
+        let had_writer = self.live_writer.is_some();
         self.live_saved();
+        let writer_stopped = had_writer && self.live_writer.is_none();
         if drained {
             self.live_writer = None;
         }
         let safe = self.live.as_mut().is_none_or(|live| {
             let text = &self.live_notes.text;
-            let safe = live.can_close(text) || live.recover_on_close(&self.store.root, text);
+            let safe = live.can_close(text)
+                || live.recover_on_close(&self.store.root, text, writer_stopped, write_recovery);
             live.close_failed = !safe;
             if !safe {
                 live.saving = Saving::Failed("Could not save the latest notes.".into());
@@ -2306,6 +2329,35 @@ mod writer_tests {
                 .unwrap()
                 .count(),
             1
+        );
+    }
+
+    #[test]
+    fn close_after_writer_panic_does_not_wait_for_a_recovery_thread() {
+        let (root, mut state) = close_fixture();
+        let (wake, woken) = mpsc::channel();
+        state.waker = Some(Arc::new(move || {
+            let _ = wake.send(());
+        }));
+        state.live_work(|| panic!("simulated writer panic"));
+        woken.recv_timeout(Duration::from_secs(1)).unwrap();
+
+        let closing_thread = thread::current().id();
+        let (_release, blocked) = mpsc::channel::<()>();
+        let closed = state.live_close_after_with(Duration::ZERO, move |text, path| {
+            // Hold an asynchronous recovery past its deadline. Dropping the sender frees it.
+            if thread::current().id() != closing_thread && blocked.recv().is_err() {
+                return false;
+            }
+            feed_io::preserve_notes(None, text, path).is_ok()
+        });
+        assert!(closed);
+        let copies = std::fs::read_dir(root.path().join("unsaved-notes")).unwrap();
+        let paths: Vec<_> = copies.map(|entry| entry.unwrap().path()).collect();
+        assert_eq!(paths.len(), 1);
+        assert_eq!(
+            std::fs::read_to_string(&paths[0]).unwrap(),
+            "The latest draft"
         );
     }
 
