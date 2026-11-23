@@ -1682,7 +1682,7 @@ fn labs(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
         .label("Stop after no speech for")
         .current(Some(current.as_str()))
         .appearance(SelectAppearance::Field)
-        .width(180.0)
+        .width(short_select_width(s, 180.0))
         .open(s.hex.select_open.as_deref() == Some("labs-silence-minutes"))
         .on_toggle(|s: &mut State| {
             s.hex.select_open = if s.hex.select_open.is_some() {
@@ -1703,28 +1703,28 @@ fn labs(s: &State, k: &Kit, p: Palette, layer: &mut Vec<El>) -> El {
             save_labs(s, |labs| labs.silence_minutes = minutes);
             s.hex.select_open = None;
         })
-        .build(k, layer);
+        .build(&row_field_kit(k, p), layer);
     settings_card("Labs", col().w_full()
         .child(setting_row(s, "labs-language-detection", "Language detection (experimental)",
             "Enable the standalone prepared-audio language stage. Writes advisory guesses only; transcription stays unchanged. Confidence thresholds are uncalibrated.",
             Switch::new(s.config.labs.language_detection)
                 .label("Language detection (experimental)").hide_label()
                 .on_toggle(|s: &mut State| save_labs(s, |labs| labs.language_detection = !labs.language_detection)).build(k).key("labs-language-detection-toggle"), true, p))
-        .child(hairline(p))
+        .child(cards::settings_divider(p))
         .child(setting_row(s, "labs-stop-forgotten", "Stop forgotten recordings",
             &format!("If a recording hears no speech for {minutes} minutes, Sidenote stops it so it doesn't run for hours."),
             Switch::new(s.config.labs.stop_forgotten_recordings)
                 .label("Stop forgotten recordings").hide_label()
                 .on_toggle(|s: &mut State| save_labs(s, |labs| labs.stop_forgotten_recordings = !labs.stop_forgotten_recordings)).build(k).key("labs-stop-forgotten-toggle"), true, p))
-        .child(hairline(p))
+        .child(cards::settings_divider(p))
         .child(setting_row(s, "labs-silence-duration", "Stop after no speech for", "Choose 10, 20, 30 or 60 minutes.", duration, false, p))
-        .child(hairline(p))
+        .child(cards::settings_divider(p))
         .child(setting_row(s, "labs-measure-files", "Measure recording files (diagnostics)",
             "Save file sizes, WAV header details and transcript line counts during recordings. No audio or text is saved.",
             Switch::new(s.config.labs.measure_recording_files)
                 .label("Measure recording files (diagnostics)").hide_label()
                 .on_toggle(|s: &mut State| save_labs(s, |labs| labs.measure_recording_files = !labs.measure_recording_files)).build(k).key("labs-measure-files-toggle"), true, p))
-        .child(hairline(p))
+        .child(cards::settings_divider(p))
         .child(setting_row(s, "labs-process-windows", "Process meetings in 5-minute windows (test)",
             "Test calls only. Runs Telugu and Hindi models while recording and saves audio windows, results and timings in Sidenote. May slow live transcription. Your meeting notes stay as they are.",
             Switch::new(s.config.labs.process_meeting_windows)
@@ -1780,10 +1780,11 @@ fn devices(s: &State, k: &Kit, p: Palette) -> El {
         "This device's name",
         help,
         TextInput::new(&s.hex.shell.device_name)
+            .height(30.0)
             .label("This device's name")
             .on_edit(|s: &mut State| &mut s.hex.shell.device_name)
             .on_submit(|s: &mut State, _| save_device_name(s))
-            .build(k)
+            .build(&row_field_kit(k, p))
             .key("device-name-input")
             .w(220.0),
         false,
@@ -1807,7 +1808,7 @@ fn devices(s: &State, k: &Kit, p: Palette) -> El {
         }
     }
     for (device, (count, last)) in peers {
-        out = out.child(hairline(p)).child(setting_row(
+        out = out.child(cards::settings_divider(p)).child(setting_row(
             s,
             &format!("sync-device-{device}"),
             device,
@@ -1817,7 +1818,7 @@ fn devices(s: &State, k: &Kit, p: Palette) -> El {
             p,
         ));
     }
-    out.child(hairline(p)).child(
+    out.child(cards::settings_divider(p)).child(
         roles::SMALL
             .wrap(
                 "Folder sync lists the meetings each device recorded. It does not show whether a device is online.",
@@ -1880,6 +1881,7 @@ fn relay_address(s: &State, k: &Kit, p: Palette) -> El {
         "Relay address",
         "Your relay's address, like wss://relay.example.com. Press Enter to save.",
         TextInput::new(&s.hex.shell.relay_address)
+            .height(30.0)
             .label("Relay address")
             .placeholder("wss://relay.example.com")
             .on_edit(|s: &mut State| &mut s.hex.shell.relay_address)
@@ -1902,7 +1904,7 @@ fn relay_address(s: &State, k: &Kit, p: Palette) -> El {
                     }
                 }
             })
-            .build(k)
+            .build(&row_field_kit(k, p))
             .key("relay-address-input")
             .w(300.0),
         false,
@@ -1990,18 +1992,20 @@ fn vocabulary(s: &State, k: &Kit, p: Palette) -> El {
 fn sync_page(s: &State, k: &Kit, p: Palette) -> El {
     let devices = col().w_full().child(settings_card(
         "Devices",
-        devices(s, k, p).child(hairline(p)).child(feature(
-            s,
-            k,
-            AppFeature::OtherDevices,
-            "Other devices",
-            &match s.nav.peers {
-                0 => "Show meetings recorded on your other devices.".into(),
-                1 => "1 meeting from another device.".into(),
-                n => format!("{n} meetings from other devices."),
-            },
-            p,
-        )),
+        devices(s, k, p)
+            .child(cards::settings_divider(p))
+            .child(feature(
+                s,
+                k,
+                AppFeature::OtherDevices,
+                "Other devices",
+                &match s.nav.peers {
+                    0 => "Show meetings recorded on your other devices.".into(),
+                    1 => "1 meeting from another device.".into(),
+                    n => format!("{n} meetings from other devices."),
+                },
+                p,
+            )),
         p,
     ));
     if s.hex.shell.relay.enabled {
@@ -2118,7 +2122,7 @@ fn labs_group(s: &State, p: Palette) -> El {
         let mut rows = col().w_full();
         for (index, (id, _, _)) in members.iter().enumerate() {
             if index != 0 {
-                rows = rows.child(hairline(p));
+                rows = rows.child(cards::settings_divider(p));
             }
             rows = rows.child(lab_row(s, snapshot, id, p));
         }
@@ -2405,10 +2409,11 @@ fn knowledge_base(s: &State, k: &Kit, p: Palette) -> El {
                 .build(k)
         } else {
             TextInput::new(&s.hex.shell.kb_fields[index])
+                .height(30.0)
                 .label(label)
                 .placeholder(if index == 1 { "origin/main" } else { "" })
                 .on_edit(move |s: &mut State| &mut s.hex.shell.kb_fields[index])
-                .build(k)
+                .build(&row_field_kit(k, p))
         };
         body = body.child(
             col()
