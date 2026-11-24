@@ -97,7 +97,12 @@ pub(super) fn shown() -> bool {
 mod close_tests {
     use super::*;
     use crate::ui::live::{Live, Phase};
-    use std::{fs, os::windows::process::CommandExt, process::Command};
+    use std::{
+        fs,
+        os::windows::process::CommandExt,
+        path::{Path, PathBuf},
+        process::Command,
+    };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DestroyWindow, HWND_MESSAGE, SendMessageW, WM_CLOSE,
     };
@@ -106,15 +111,75 @@ mod close_tests {
 
     #[test]
     fn accessible_close_reopens_with_an_unsaved_draft() {
-        run_offscreen("accessible_close_reopens_with_an_unsaved_draft", false);
+        run_offscreen(
+            "accessible_close_reopens_with_an_unsaved_draft",
+            false,
+            true,
+        );
     }
 
     #[test]
     fn native_close_keeps_the_unsaved_draft_open() {
-        run_offscreen("native_close_keeps_the_unsaved_draft_open", true);
+        run_offscreen("native_close_keeps_the_unsaved_draft_open", true, true);
     }
 
-    fn run_offscreen(test: &str, native: bool) {
+    #[test]
+    fn accessible_close_accepts_a_saved_draft_without_reopening() {
+        run_offscreen(
+            "accessible_close_accepts_a_saved_draft_without_reopening",
+            false,
+            false,
+        );
+    }
+
+    #[test]
+    fn native_close_accepts_a_saved_draft_without_reopening() {
+        run_offscreen(
+            "native_close_accepts_a_saved_draft_without_reopening",
+            true,
+            false,
+        );
+    }
+
+    #[test]
+    fn accepted_close_requests_quit_and_saves_only_once() {
+        CLOSE_ACCEPTED.set(false);
+        crate::test_paths::isolate();
+        let root = tempfile::tempdir().unwrap();
+        let mut state = draft_state(root.path().to_owned());
+        let mut first = rune::Tx::default();
+        let mut quit = rune::Tx::default();
+        quit.quit();
+        assert!(request_close(&mut state, &mut first));
+        assert!(CLOSE_ACCEPTED.get());
+        assert_eq!(format!("{first:?}"), format!("{quit:?}"));
+        assert_eq!(saved_drafts(root.path()), [DRAFT]);
+
+        state.live_notes = rune::TextEdit::new("A different unsaved draft");
+        let mut second = rune::Tx::default();
+        let untouched = format!("{second:?}");
+        assert!(request_close(&mut state, &mut second));
+        assert_eq!(format!("{second:?}"), untouched);
+        assert_eq!(saved_drafts(root.path()), [DRAFT]);
+        CLOSE_ACCEPTED.set(false);
+    }
+
+    fn draft_state(root: PathBuf) -> State {
+        let mut state = State::new();
+        state.store.root = root;
+        state.live = Some(Live::scene(Phase::Recording, None));
+        state.live_notes = rune::TextEdit::new(DRAFT);
+        state
+    }
+
+    fn saved_drafts(root: &Path) -> Vec<String> {
+        fs::read_dir(root.join("unsaved-notes"))
+            .unwrap()
+            .map(|entry| fs::read_to_string(entry.unwrap().path()).unwrap())
+            .collect()
+    }
+
+    fn run_offscreen(test: &str, native: bool, refuse_save: bool) {
         const FLAG: &str = "SIDENOTE_CLOSE_ROUTE_TEST";
         if std::env::var(FLAG).as_deref() != Ok(test) {
             let output = Command::new(std::env::current_exe().unwrap())
@@ -136,13 +201,16 @@ mod close_tests {
             return;
         }
 
+        CLOSE_ACCEPTED.set(false);
         crate::test_paths::isolate();
         let root = tempfile::tempdir().unwrap();
-        fs::write(
-            root.path().join("unsaved-notes"),
-            "block the recovery directory",
-        )
-        .unwrap();
+        if refuse_save {
+            fs::write(
+                root.path().join("unsaved-notes"),
+                "block the recovery directory",
+            )
+            .unwrap();
+        }
         let backdrop = root.path().join("backdrop.png");
         fs::write(
             &backdrop,
@@ -189,13 +257,7 @@ mod close_tests {
         } else {
             |_, _| WINDOW.get().unwrap().update(|_, tx| tx.close_window())
         });
-        let app = rune::App::new(spec).init(move || {
-            let mut state = State::new();
-            state.store.root = state_root;
-            state.live = Some(Live::scene(Phase::Recording, None));
-            state.live_notes = rune::TextEdit::new(DRAFT);
-            state
-        });
+        let app = rune::App::new(spec).init(move || draft_state(state_root));
         let handle = app.handle();
         configure(app)
             .args([
@@ -211,9 +273,23 @@ mod close_tests {
             ])
             .try_run()
             .unwrap();
-        assert!(handle.is_visible());
-        assert!(fs::read_to_string(tree).unwrap().contains(DRAFT));
-        assert!(!CLOSE_ACCEPTED.get());
+        if refuse_save {
+            assert!(handle.is_visible());
+            assert!(fs::read_to_string(tree).unwrap().contains(DRAFT));
+            assert!(!CLOSE_ACCEPTED.get());
+        } else {
+            assert!(CLOSE_ACCEPTED.get());
+            assert_eq!(saved_drafts(root.path()), [DRAFT]);
+            // A virtual desktop runs Close but leaves Tx::quit to its host.
+            assert_eq!(handle.is_visible(), native);
+            let frames = rune::tooling::headless_run().unwrap().window_frames();
+            assert!(
+                !frames
+                    .windows(2)
+                    .any(|pair| !pair[0].visible && pair[1].visible)
+            );
+        }
+        CLOSE_ACCEPTED.set(false);
     }
 }
 
