@@ -2,6 +2,9 @@ use super::super::tests::{Fakes, fake, id, ranges};
 use super::signals::Signal;
 use super::*;
 use std::{io::BufRead, os::windows::process::CommandExt, process::Stdio};
+
+const FIXTURE_HANG_GUARD: Duration = Duration::from_secs(60);
+
 #[test]
 fn worker_child() {
     let Some(mode) = std::env::args().skip_while(|a| a != "--skip").nth(1) else {
@@ -69,6 +72,10 @@ fn worker_child() {
         if mode == "hang" {
             Signal::notify("fixture-active");
             std::thread::sleep(Duration::from_secs(60));
+        }
+        if mode == "crash-on-release" {
+            Signal::open_for_wait("fixture-exit").wait_active();
+            std::process::exit(7);
         }
         if mode == "crash" {
             std::process::exit(7);
@@ -165,8 +172,9 @@ fn closed_input_before_process_exit_preserves_status() {
     let mut command = command("close-input");
     let exit = Signal::attach(&mut command, "fixture-exit");
     let mut worker = start_ready(command);
-    // Release the fixture only after the failed write and the live-process check.
-    super::ON_BROKEN_PIPE.with(|slot| *slot.borrow_mut() = Some(exit));
+    worker.timeout = Duration::ZERO;
+    // The fixture exits after the failed write and the initial process check.
+    exit_at_deadline(exit);
     let error = worker
         .recognize(&ranges(Path::new("unused.wav")).remove(1))
         .unwrap_err();
@@ -175,6 +183,38 @@ fn closed_input_before_process_exit_preserves_status() {
         "{error:?}"
     );
     worker.finish().unwrap();
+}
+
+#[test]
+fn process_exit_after_response_poll_preserves_status() {
+    let mut command = command("crash-on-release");
+    let exit = Signal::attach(&mut command, "fixture-exit");
+    let mut worker = start_ready(command);
+    worker.timeout = Duration::ZERO;
+    // The fixture exits after the response poll saw a live process.
+    exit_at_deadline(exit);
+    let error = worker
+        .recognize(&ranges(Path::new("unused.wav")).remove(1))
+        .unwrap_err();
+    assert!(
+        matches!(error.downcast_ref::<WorkerFailure>(), Some(WorkerFailure::Exited(status)) if status.code() == Some(7)),
+        "{error:?}"
+    );
+}
+
+fn exit_at_deadline(exit: Signal) {
+    AT_RESPONSE_DEADLINE.with(|slot| {
+        *slot.borrow_mut() = Some(Box::new(move |child| {
+            exit.set();
+            assert!(
+                child
+                    .wait_for(FIXTURE_HANG_GUARD.as_millis() as u32)
+                    .unwrap()
+                    .is_some(),
+                "fixture did not exit before the hang guard"
+            );
+        }));
+    });
 }
 #[test]
 fn process_crash_preserves_completed_receipts() {

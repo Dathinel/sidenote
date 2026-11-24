@@ -27,9 +27,11 @@ impl std::error::Error for WorkerFailure {}
 type Cleanup = std::result::Result<(), WorkerFailure>;
 const SHUTDOWN_BOUND: Duration = Duration::from_millis(500);
 #[cfg(test)]
+type DeadlineHook = Box<dyn FnOnce(&crate::platform::JobProcess)>;
+#[cfg(test)]
 std::thread_local! {
     static CONTROLLER_GATE: std::cell::RefCell<Option<Receiver<()>>> = const { std::cell::RefCell::new(None) };
-    static ON_BROKEN_PIPE: std::cell::RefCell<Option<signals::Signal>> = const { std::cell::RefCell::new(None) };
+    static AT_RESPONSE_DEADLINE: std::cell::RefCell<Option<DeadlineHook>> = const { std::cell::RefCell::new(None) };
 }
 fn controller(
     job: Arc<crate::platform::ProcessJob>,
@@ -153,16 +155,12 @@ impl Worker {
             return Err(error.into());
         }
         // Windows can close stdin before it signals the process handle.
-        #[cfg(test)]
-        ON_BROKEN_PIPE.with(|slot| {
-            if let Some(signal) = slot.borrow_mut().take() {
-                signal.set();
-            }
-        });
         loop {
             let remaining = self.timeout.saturating_sub(started.elapsed());
             let wait_ms = remaining.as_millis().min(10) as u32;
             if wait_ms == 0 {
+                #[cfg(test)]
+                self.at_response_deadline();
                 return Err(error.into());
             }
             let status = self.child.wait_for(wait_ms)?;
@@ -182,6 +180,12 @@ impl Worker {
             return Err(WorkerFailure::Exited(status).into());
         }
         Ok(())
+    }
+    #[cfg(test)]
+    fn at_response_deadline(&self) {
+        if let Some(hook) = AT_RESPONSE_DEADLINE.with(|slot| slot.borrow_mut().take()) {
+            hook(&self.child);
+        }
     }
     /// Wait at most 500 ms; a cleanup failure leaves the controller owning deferred reaping.
     pub fn shutdown(&mut self) -> Result<()> {
@@ -231,6 +235,8 @@ impl Recognizer for Worker {
             loop {
                 self.running()?;
                 if started.elapsed() >= self.timeout {
+                    #[cfg(test)]
+                    self.at_response_deadline();
                     return Err(Failure::Timeout.into());
                 }
                 if path.exists() {

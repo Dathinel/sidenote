@@ -202,6 +202,53 @@ jobs:
         run: cargo build --locked -p sidenote-sync --bin sidenote-sync-worker --example worker_fault
       - name: Test Windows routing CLI recording admission
         run: cargo test --locked -p sidenote --features dev,asr-runtime --test public_cpu_audio
+      - name: Test Windows worker exits and Tasks edits under CPU load
+        shell: bash
+        run: |
+          export SIDENOTE_DATA_DIR=$(cygpath -w "$RUNNER_TEMP/sidenote-stress")
+          python -I - <<'PY'
+          import os
+          import subprocess
+          import sys
+
+          cargo = ["cargo", "test", "--locked", "-p", "sidenote", "--features", "dev,asr-runtime"]
+          subprocess.run([*cargo, "--no-run", "--lib", "--bin", "sidenote"], check=True)
+          groups = [
+              (["--lib"], "core::meeting_router::batches::worker::tests::", [
+                  "closed_input_before_process_exit_preserves_status",
+                  "process_exit_after_response_poll_preserves_status",
+                  "process_crash_preserves_completed_receipts",
+              ]),
+              (["--bin", "sidenote"], "ui::tasks::tests::", [
+                  "a_stale_completion_reloads_the_saved_tick_before_clearing_pending_state",
+                  "closing_a_removed_tasks_panel_keeps_its_title_draft",
+                  "legacy_duplicate_keeps_its_index_for_feedback_and_title_save",
+                  "panel_mark_done_failure_survives_selecting_another_task",
+              ]),
+          ]
+          burners = []
+          results = []
+          try:
+              for _ in range(os.cpu_count() or 1):
+                  burner = subprocess.Popen(
+                      [sys.executable, "-I", "-u", "-c", "print('ready')\nwhile True: pass"],
+                      stdout=subprocess.PIPE,
+                  )
+                  burners.append(burner)
+                  if burner.stdout.readline().strip() != b"ready":
+                      raise RuntimeError("CPU load process did not start")
+              for target, prefix, tests in groups:
+                  results.append(subprocess.run(
+                      [*cargo, *target, "--", "--exact", *(prefix + test for test in tests)],
+                      check=False,
+                  ).returncode)
+          finally:
+              for burner in burners:
+                  burner.terminate()
+              for burner in burners:
+                  burner.wait()
+          sys.exit(int(any(results)))
+          PY
       - name: Test Windows-specific behavior
         shell: bash
         run: |

@@ -135,11 +135,11 @@
 
   "src/core/meeting_router/batches/linux_worker_tests.rs": "b844f337e5b561188cd282777f37a442ea93ff89807b8e836de5d28602f018d8",
 
-  "src/core/meeting_router/batches/worker.rs": "f29a54eb42367bb608957eceaebd92d1120a4074a4bd5792d3b10c692674d726",
+  "src/core/meeting_router/batches/worker.rs": "0fc6e11d908c211c2857de98d72b93b08680f46541b15da43cfcfe9322b9d85a",
 
   "src/core/meeting_router/batches/worker/lifetime_tests.rs": "c927b6dd91599e016eff79bcad7fcfc57ffce673836ec027c251612f2f3dd15c",
 
-  "src/core/meeting_router/batches/worker/tests.rs": "cdb613970ca7581cad9798d4328e9bf917e89dc7e2e0a40e4cd9104248c2476c",
+  "src/core/meeting_router/batches/worker/tests.rs": "4927b143f37c1eeae2d71cf4344af660495079d41bec43ea56f18205afb02838",
 
   "src/core/meeting_router/cache.rs": "6e2137b05436cfc8f5fcfd4f5971222e2bcadad091a8681d98b809db780d6cb1",
 
