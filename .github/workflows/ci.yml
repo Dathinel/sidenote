@@ -200,6 +200,8 @@ jobs:
           cargo clippy --workspace --locked --all-targets --features dev,asr-runtime -- -D warnings
       - name: Build the sync worker and fault-test fixture
         run: cargo build --locked -p sidenote-sync --bin sidenote-sync-worker --example worker_fault
+      - name: Test Windows routing CLI recording admission
+        run: cargo test --locked -p sidenote --features dev,asr-runtime --test public_cpu_audio
       - name: Test Windows-specific behavior
         shell: bash
         run: |
