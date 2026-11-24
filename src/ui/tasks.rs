@@ -4242,6 +4242,7 @@ mod tests {
 
     const MEETING: &str = "1800000000001-1";
     const MANUAL_ROW: &str = "manual/handmade";
+    const TASK_UPDATE_HANG_GUARD: Wait = Wait::from_secs(60);
 
     fn tasks_page() -> rune::Runtime<State> {
         crate::test_paths::isolate();
@@ -4273,22 +4274,21 @@ mod tests {
         t.items_changed();
     }
 
-    fn drain_task_updates(rt: &mut rune::Runtime<State>) {
-        let deadline = Instant::now() + Wait::from_secs(2);
+    fn drain_task_updates(rt: &mut rune::Runtime<State>, hang_guard: Instant) {
         rt.update(|s, _| {
+            // Edited and Area completion events advance the pending work.
             while s.edit_busy || s.areas.refresh_pending {
-                let event = next_task_event(s, deadline);
+                let event = next_task_event(s, hang_guard);
                 s.apply_event(event);
             }
         });
         rt.frame(0.2);
     }
 
-    fn next_task_event(s: &State, deadline: Instant) -> super::super::Event {
-        let remaining = deadline
-            .checked_duration_since(Instant::now())
-            .expect("task update deadline");
-        s.events_rx.recv_timeout(remaining).expect("task update")
+    fn next_task_event(s: &State, hang_guard: Instant) -> super::super::Event {
+        s.events_rx
+            .recv_timeout(hang_guard.saturating_duration_since(Instant::now()))
+            .expect("task update did not arrive before the hang guard")
     }
 
     fn tap_task_control(rt: &mut rune::Runtime<State>, key: &str) {
@@ -4299,7 +4299,8 @@ mod tests {
         rt.frame(0.2);
     }
 
-    fn stored_tasks_page(root: &Path) -> rune::Runtime<State> {
+    fn stored_tasks_page(root: &Path) -> (rune::Runtime<State>, Instant) {
+        let hang_guard = Instant::now() + TASK_UPDATE_HANG_GUARD;
         let folder = root.join(MEETING);
         fs::create_dir(&folder).unwrap();
         fs::write(
@@ -4313,7 +4314,7 @@ mod tests {
         )
         .unwrap();
         let mut rt = tasks_page();
-        drain_task_updates(&mut rt);
+        drain_task_updates(&mut rt, hang_guard);
         rt.update(|s, _| {
             s.store = core::StateStore::new(root.into());
             s.tasks.store = TaskStore::new(root.into());
@@ -4323,16 +4324,15 @@ mod tests {
             s.tasks.done_open = true;
             s.rebuild_tasks();
         });
-        drain_task_updates(&mut rt);
-        rt
+        drain_task_updates(&mut rt, hang_guard);
+        (rt, hang_guard)
     }
 
-    fn apply_first_tick(rt: &mut rune::Runtime<State>, invalidate_view: bool) {
+    fn apply_first_tick(rt: &mut rune::Runtime<State>, hang_guard: Instant, invalidate_view: bool) {
         use super::super::{Event, edit_worker::Completion};
-        let deadline = Instant::now() + Wait::from_secs(2);
         rt.update(|s, _| {
             loop {
-                let event = next_task_event(s, deadline);
+                let event = next_task_event(s, hang_guard);
                 if let Event::Edited(Completion::Move { moved, error, .. }) = &event {
                     assert!(error.is_none());
                     assert!(
@@ -4361,7 +4361,7 @@ mod tests {
     #[test]
     fn a_board_tick_reverses_a_pending_list_tick() {
         let root = tempfile::tempdir().unwrap();
-        let mut rt = stored_tasks_page(root.path());
+        let (mut rt, hang_guard) = stored_tasks_page(root.path());
         let key = format!("ttick-{MEETING}-0");
         tap_task_control(&mut rt, &key);
         rt.update(|s, _| {
@@ -4370,8 +4370,8 @@ mod tests {
         });
         rt.frame(0.2);
         tap_task_control(&mut rt, &key);
-        apply_first_tick(&mut rt, false);
-        drain_task_updates(&mut rt);
+        apply_first_tick(&mut rt, hang_guard, false);
+        drain_task_updates(&mut rt, hang_guard);
         assert_eq!(
             rt.state.store.load(MEETING).unwrap().checked,
             BTreeSet::from(["open:first".into()]),
@@ -4382,14 +4382,14 @@ mod tests {
     #[test]
     fn a_list_tick_reverses_a_save_before_its_snapshot_arrives() {
         let root = tempfile::tempdir().unwrap();
-        let mut rt = stored_tasks_page(root.path());
+        let (mut rt, hang_guard) = stored_tasks_page(root.path());
         let key = format!("ttick-{MEETING}-0");
         tap_task_control(&mut rt, &key);
-        apply_first_tick(&mut rt, false);
+        apply_first_tick(&mut rt, hang_guard, false);
         assert!(rt.state.areas.refresh_pending);
         assert!(!rt.state.tasks.item(MEETING, 0).unwrap().done);
         tap_task_control(&mut rt, &key);
-        drain_task_updates(&mut rt);
+        drain_task_updates(&mut rt, hang_guard);
         assert_eq!(
             rt.state.store.load(MEETING).unwrap().checked,
             BTreeSet::from(["open:first".into()]),
@@ -4400,10 +4400,10 @@ mod tests {
     #[test]
     fn a_stale_completion_reloads_the_saved_tick_before_clearing_pending_state() {
         let root = tempfile::tempdir().unwrap();
-        let mut rt = stored_tasks_page(root.path());
+        let (mut rt, hang_guard) = stored_tasks_page(root.path());
         tap_task_control(&mut rt, &format!("ttick-{MEETING}-0"));
-        apply_first_tick(&mut rt, true);
-        drain_task_updates(&mut rt);
+        apply_first_tick(&mut rt, hang_guard, true);
+        drain_task_updates(&mut rt, hang_guard);
         assert!(rt.state.tasks.item(MEETING, 0).unwrap().done);
         assert!(rt.state.tasks.board_pending.is_empty());
     }
@@ -4419,12 +4419,12 @@ mod tests {
     #[test]
     fn board_checkbox_failure_stays_with_the_card_and_retries() {
         let root = tempfile::tempdir().unwrap();
-        let mut rt = stored_tasks_page(root.path());
+        let (mut rt, hang_guard) = stored_tasks_page(root.path());
         rt.update(|s, _| s.set_layout(core::TasksLayout::Board));
         rt.frame(0.2);
         let lock = block_task_store(root.path(), &format!("{MEETING}.json"));
         tap_task_control(&mut rt, &format!("ttick-{MEETING}-0"));
-        drain_task_updates(&mut rt);
+        drain_task_updates(&mut rt, hang_guard);
         let retry = format!("board-tick-retry-{MEETING}-0");
         assert!(rt.find(&retry).is_some());
         assert!(rt.find(&format!("board-tick-retry-{MEETING}-1")).is_none());
@@ -4454,7 +4454,7 @@ mod tests {
                 .iter()
                 .any(|el| el.text.as_deref() == Some("Saving"))
         );
-        drain_task_updates(&mut rt);
+        drain_task_updates(&mut rt, hang_guard);
         assert!(rt.find(&retry).is_none());
         assert_eq!(
             rt.state.store.load(MEETING).unwrap().checked,
@@ -4465,12 +4465,12 @@ mod tests {
     #[test]
     fn panel_mark_done_failure_survives_selecting_another_task() {
         let root = tempfile::tempdir().unwrap();
-        let mut rt = stored_tasks_page(root.path());
+        let (mut rt, hang_guard) = stored_tasks_page(root.path());
         let lock = block_task_store(root.path(), &format!("{MEETING}.json"));
         let (first, neighbor) = (format!("ttask-{MEETING}-0"), format!("ttask-{MEETING}-1"));
         tap_task_control(&mut rt, &first);
         tap_task_control(&mut rt, "pdone");
-        drain_task_updates(&mut rt);
+        drain_task_updates(&mut rt, hang_guard);
         let retry = format!("panel-tick-retry-{MEETING}-0");
         assert!(rt.find(&retry).is_some());
         assert!(rt.state.tasks.notice.is_none());
@@ -4484,7 +4484,7 @@ mod tests {
         tap_task_control(&mut rt, &first);
         fs::remove_dir(lock).unwrap();
         tap_task_control(&mut rt, &retry);
-        drain_task_updates(&mut rt);
+        drain_task_updates(&mut rt, hang_guard);
         assert!(rt.find(&retry).is_none());
         assert_eq!(
             rt.state.store.load(MEETING).unwrap().checked,
@@ -4495,10 +4495,10 @@ mod tests {
     #[test]
     fn a_list_failure_can_be_retried_from_the_panel_after_switching_to_board() {
         let root = tempfile::tempdir().unwrap();
-        let mut rt = stored_tasks_page(root.path());
+        let (mut rt, hang_guard) = stored_tasks_page(root.path());
         let lock = block_task_store(root.path(), &format!("{MEETING}.json"));
         tap_task_control(&mut rt, &format!("ttick-{MEETING}-0"));
-        drain_task_updates(&mut rt);
+        drain_task_updates(&mut rt, hang_guard);
         assert!(rt.find(&format!("ttick-retry-{MEETING}-0")).is_some());
 
         rt.update(|s, _| s.set_layout(core::TasksLayout::Board));
@@ -4509,14 +4509,14 @@ mod tests {
             s.meetings[0].summary.todo.swap(0, 1);
             s.rebuild_tasks();
         });
-        drain_task_updates(&mut rt);
+        drain_task_updates(&mut rt, hang_guard);
         assert!(rt.state.store.load(MEETING).unwrap().checked.is_empty());
         assert!(rt.find(&format!("panel-tick-retry-{MEETING}-0")).is_none());
         let retry = format!("panel-tick-retry-{MEETING}-1");
 
         fs::remove_dir(lock).unwrap();
         tap_task_control(&mut rt, &retry);
-        drain_task_updates(&mut rt);
+        drain_task_updates(&mut rt, hang_guard);
         assert!(rt.find(&retry).is_none());
         assert_eq!(
             rt.state.store.load(MEETING).unwrap().checked,
@@ -4529,7 +4529,7 @@ mod tests {
         use super::super::{Event, edit_worker::Completion};
 
         let root = tempfile::tempdir().unwrap();
-        let mut rt = stored_tasks_page(root.path());
+        let (mut rt, hang_guard) = stored_tasks_page(root.path());
         rt.update(|s, _| {
             let meeting = &mut s.meetings[0];
             let mut duplicate = meeting.summary.todo[0].clone();
@@ -4542,10 +4542,10 @@ mod tests {
             .unwrap();
             s.rebuild_tasks();
         });
-        drain_task_updates(&mut rt);
+        drain_task_updates(&mut rt, hang_guard);
         let lock = block_task_store(root.path(), &format!("{MEETING}.json"));
         tap_task_control(&mut rt, &format!("ttick-{MEETING}-1"));
-        drain_task_updates(&mut rt);
+        drain_task_updates(&mut rt, hang_guard);
         assert!(rt.find(&format!("ttick-retry-{MEETING}-0")).is_none());
         assert!(rt.find(&format!("ttick-retry-{MEETING}-1")).is_some());
 
@@ -4557,9 +4557,8 @@ mod tests {
         rt.frame(0.2);
         tap_task_control(&mut rt, "task-text-save");
         rt.update(|s, _| {
-            let deadline = Instant::now() + Wait::from_secs(2);
             loop {
-                let event = next_task_event(s, deadline);
+                let event = next_task_event(s, hang_guard);
                 if let Event::Edited(Completion::Task { index, result, .. }) = &event {
                     assert_eq!(*index, 1);
                     assert!(result.is_ok());
@@ -4569,7 +4568,7 @@ mod tests {
                 s.apply_event(event);
             }
         });
-        drain_task_updates(&mut rt);
+        drain_task_updates(&mut rt, hang_guard);
         let overrides = rt.state.tasks.store.load_overrides().unwrap();
         let entries = &overrides.tasks[MEETING];
         let key = |index| core::task_override_key(MEETING, "", "Collect samples", index);
@@ -4583,19 +4582,19 @@ mod tests {
     #[test]
     fn a_committed_move_tick_replaces_a_failed_checkbox_even_if_status_fails() {
         let root = tempfile::tempdir().unwrap();
-        let mut rt = stored_tasks_page(root.path());
+        let (mut rt, hang_guard) = stored_tasks_page(root.path());
         rt.update(|s, _| s.set_layout(core::TasksLayout::Board));
         rt.frame(0.2);
         let tick_lock = block_task_store(root.path(), &format!("{MEETING}.json"));
         tap_task_control(&mut rt, &format!("ttick-{MEETING}-0"));
-        drain_task_updates(&mut rt);
+        drain_task_updates(&mut rt, hang_guard);
         let retry = format!("board-tick-retry-{MEETING}-0");
         assert!(rt.find(&retry).is_some());
 
         fs::remove_dir(tick_lock).unwrap();
         block_task_store(root.path(), "task-overrides.json");
         rt.update(|s, _| s.move_card(MEETING, 0, core::BoardColumn::Waiting));
-        drain_task_updates(&mut rt);
+        drain_task_updates(&mut rt, hang_guard);
         assert!(rt.find(&retry).is_none());
         assert!(rt.find("tasks-notice-dismiss").is_some());
         assert_eq!(
@@ -4611,7 +4610,7 @@ mod tests {
     #[test]
     fn closing_a_removed_tasks_panel_keeps_its_title_draft() {
         let root = tempfile::tempdir().unwrap();
-        let mut rt = stored_tasks_page(root.path());
+        let (mut rt, hang_guard) = stored_tasks_page(root.path());
         tap_task_control(&mut rt, &format!("ttask-{MEETING}-0"));
         tap_task_control(&mut rt, "ptitle");
         rt.update(|s, _| {
@@ -4626,9 +4625,9 @@ mod tests {
             .unwrap();
             s.rebuild_tasks();
         });
-        drain_task_updates(&mut rt);
+        drain_task_updates(&mut rt, hang_guard);
         rt.update(|s, _| assert!(!s.close_panel()));
-        drain_task_updates(&mut rt);
+        drain_task_updates(&mut rt, hang_guard);
 
         assert_eq!(rt.state.tasks.inputs.title.text, "Gather the first batch");
         assert_eq!(rt.state.panel_task().unwrap().stable_id, "first");
@@ -4655,7 +4654,7 @@ mod tests {
     #[test]
     fn reordered_task_panel_applies_title_save_and_failure() {
         let root = tempfile::tempdir().unwrap();
-        let mut rt = stored_tasks_page(root.path());
+        let (mut rt, hang_guard) = stored_tasks_page(root.path());
         tap_task_control(&mut rt, &format!("ttask-{MEETING}-0"));
         rt.update(|s, _| {
             let meeting = &mut s.meetings[0];
@@ -4667,20 +4666,20 @@ mod tests {
             .unwrap();
             s.rebuild_tasks();
         });
-        drain_task_updates(&mut rt);
+        drain_task_updates(&mut rt, hang_guard);
 
         tap_task_control(&mut rt, "ptitle");
         rt.update(|s, _| s.tasks.inputs.title = TextEdit::new("Gather samples"));
         rt.frame(0.2);
         let lock = block_task_store(root.path(), "task-overrides.json");
         tap_task_control(&mut rt, "task-text-save");
-        drain_task_updates(&mut rt);
+        drain_task_updates(&mut rt, hang_guard);
         assert!(rt.state.tasks.edit_failed);
         assert!(rt.find("tasks-notice-dismiss").is_some());
 
         fs::remove_dir(lock).unwrap();
         tap_task_control(&mut rt, "task-text-save");
-        drain_task_updates(&mut rt);
+        drain_task_updates(&mut rt, hang_guard);
         assert!(!rt.state.tasks.edit_failed);
         assert!(rt.find("task-text-save").is_none());
         assert_eq!(rt.state.tasks.edit_base["title"], "Gather samples");
@@ -4694,7 +4693,7 @@ mod tests {
     #[test]
     fn list_tick_failures_retry_the_original_generated_and_manual_tasks() {
         let root = tempfile::tempdir().unwrap();
-        let mut rt = stored_tasks_page(root.path());
+        let (mut rt, hang_guard) = stored_tasks_page(root.path());
         let generated_lock = block_task_store(root.path(), &format!("{MEETING}.json"));
         let manual_lock = block_task_store(root.path(), "task-overrides.json");
 
@@ -4706,7 +4705,7 @@ mod tests {
             assert!(s.open_task(MANUAL_ROW, 0));
             s.rebuild_tasks();
         });
-        drain_task_updates(&mut rt);
+        drain_task_updates(&mut rt, hang_guard);
         assert_eq!(rt.state.tasks.item(MEETING, 1).unwrap().stable_id, "first");
         assert!(!rt.state.tasks.item(MEETING, 1).unwrap().done);
         assert!(rt.state.store.load(MEETING).unwrap().checked.is_empty());
@@ -4726,7 +4725,7 @@ mod tests {
         }));
 
         tap_task_control(&mut rt, "ttick-manual/handmade-0");
-        drain_task_updates(&mut rt);
+        drain_task_updates(&mut rt, hang_guard);
         assert!(rt.state.tasks.item(MANUAL_ROW, 0).unwrap().done);
         assert!(rt.find("ttick-retry-manual/handmade-0").is_some());
         assert!(rt.state.tasks.store.load_overrides().unwrap().manual[0].done);
@@ -4740,7 +4739,7 @@ mod tests {
                 .iter()
                 .any(|el| el.text.as_deref() == Some("Saving"))
         );
-        drain_task_updates(&mut rt);
+        drain_task_updates(&mut rt, hang_guard);
         assert!(rt.find(&format!("ttick-retry-{MEETING}-1")).is_none());
         assert!(rt.find("ttick-retry-manual/handmade-0").is_some());
         let checked = rt.state.store.load(MEETING).unwrap().checked;
@@ -4755,7 +4754,7 @@ mod tests {
             .set_manual_done_view("handmade", false)
             .unwrap();
         tap_task_control(&mut rt, "ttick-retry-manual/handmade-0");
-        drain_task_updates(&mut rt);
+        drain_task_updates(&mut rt, hang_guard);
         assert!(!rt.state.tasks.store.load_overrides().unwrap().manual[0].done);
         assert!(rt.find("ttick-retry-manual/handmade-0").is_none());
     }

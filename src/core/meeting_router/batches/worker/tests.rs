@@ -2,6 +2,9 @@ use super::super::tests::{Fakes, fake, id, ranges};
 use super::signals::Signal;
 use super::*;
 use std::{io::BufRead, os::windows::process::CommandExt, process::Stdio};
+
+const FIXTURE_HANG_GUARD: Duration = Duration::from_secs(60);
+
 #[test]
 fn worker_child() {
     let Some(mode) = std::env::args().skip_while(|a| a != "--skip").nth(1) else {
@@ -70,6 +73,10 @@ fn worker_child() {
             Signal::notify("fixture-active");
             std::thread::sleep(Duration::from_secs(60));
         }
+        if mode == "crash-on-release" {
+            Signal::open_for_wait("fixture-exit").wait_active();
+            std::process::exit(7);
+        }
         if mode == "crash" {
             std::process::exit(7);
         }
@@ -79,6 +86,10 @@ fn worker_child() {
                 std::env::var("SIDENOTE_BATCH_THREADS").unwrap().parse::<usize>().unwrap()}),
         )
         .unwrap();
+        if mode == "exit-after-result" {
+            Signal::open_for_wait("fixture-exit").wait_active();
+            break;
+        }
     }
     grandchild.kill().unwrap();
     grandchild.wait().unwrap();
@@ -164,9 +175,11 @@ fn cancel_timeout_drop_reap_worker_tree() {
 fn closed_input_before_process_exit_preserves_status() {
     let mut command = command("close-input");
     let exit = Signal::attach(&mut command, "fixture-exit");
+    let cleanup = CleanupSync::pause_controller();
     let mut worker = start_ready(command);
-    // Release the fixture only after the failed write and the live-process check.
-    super::ON_BROKEN_PIPE.with(|slot| *slot.borrow_mut() = Some(exit));
+    worker.timeout = Duration::ZERO;
+    // The fixture exits after the failed write and the initial process check.
+    exit_at_deadline(exit, Some(cleanup));
     let error = worker
         .recognize(&ranges(Path::new("unused.wav")).remove(1))
         .unwrap_err();
@@ -176,6 +189,76 @@ fn closed_input_before_process_exit_preserves_status() {
     );
     worker.finish().unwrap();
 }
+
+#[test]
+fn process_exit_after_response_poll_preserves_status() {
+    let mut command = command("crash-on-release");
+    let exit = Signal::attach(&mut command, "fixture-exit");
+    let mut worker = start_ready(command);
+    worker.timeout = Duration::ZERO;
+    // The fixture exits after the response poll saw a live process.
+    exit_at_deadline(exit, None);
+    let error = worker
+        .recognize(&ranges(Path::new("unused.wav")).remove(1))
+        .unwrap_err();
+    assert!(
+        matches!(error.downcast_ref::<WorkerFailure>(), Some(WorkerFailure::Exited(status)) if status.code() == Some(7)),
+        "{error:?}"
+    );
+}
+
+fn exit_at_deadline(exit: Signal, cleanup: Option<CleanupSync>) {
+    AT_RESPONSE_DEADLINE.with(|slot| {
+        *slot.borrow_mut() = Some(Box::new(move |worker| {
+            let hang_guard = Instant::now() + FIXTURE_HANG_GUARD;
+            exit.set();
+            wait_for_fixture_exit(worker, hang_guard);
+            if let Some(cleanup) = cleanup {
+                cleanup.wait_until_reported(worker, hang_guard);
+            }
+        }));
+    });
+}
+
+fn wait_for_fixture_exit(worker: &Worker, hang_guard: Instant) {
+    let remaining = hang_guard.saturating_duration_since(Instant::now());
+    assert!(
+        worker
+            .child
+            .wait_for(remaining.as_millis() as u32)
+            .unwrap()
+            .is_some(),
+        "fixture did not exit before the hang guard"
+    );
+}
+
+struct CleanupSync {
+    release: Sender<()>,
+    reported: Receiver<()>,
+}
+
+impl CleanupSync {
+    fn pause_controller() -> Self {
+        let (release, gate) = mpsc::channel();
+        let (finished, reported) = mpsc::channel();
+        CONTROLLER_GATE.with(|slot| *slot.borrow_mut() = Some(gate));
+        CONTROLLER_REPORTED.with(|slot| *slot.borrow_mut() = Some(finished));
+        Self { release, reported }
+    }
+
+    fn wait_until_reported(&self, worker: &Worker, hang_guard: Instant) {
+        // Keep both production cleanup clocks idle until the fixture has drained.
+        while !worker.job.empty().unwrap() {
+            assert!(Instant::now() < hang_guard, "fixture job did not drain");
+            std::thread::yield_now();
+        }
+        self.release.send(()).unwrap();
+        self.reported
+            .recv_timeout(hang_guard.saturating_duration_since(Instant::now()))
+            .expect("controller did not report cleanup before the hang guard");
+    }
+}
+
 #[test]
 fn process_crash_preserves_completed_receipts() {
     let temp = tempfile::tempdir().unwrap();
@@ -196,7 +279,7 @@ fn process_crash_preserves_completed_receipts() {
             assert_eq!(cached(root, &plan, id), *id != inflight);
         }
     }
-    run(root, &plan, &mut Loader("ok"), &mut bridge).unwrap();
+    run(root, &plan, &mut Loader("exit-after-result"), &mut bridge).unwrap();
     for batch in plan.batches.values() {
         for id in batch.keys() {
             assert!(cached(root, &plan, id));
@@ -204,6 +287,28 @@ fn process_crash_preserves_completed_receipts() {
     }
 }
 struct Loader(&'static str);
+
+struct ReceiptRecovery {
+    worker: Worker,
+    exit: Signal,
+    cleanup: CleanupSync,
+}
+
+impl Recognizer for ReceiptRecovery {
+    fn recognize(&mut self, range: &Range) -> Result<Value> {
+        self.worker.recognize(range)
+    }
+
+    fn finish(&mut self) -> Result<()> {
+        // The fixture stays alive until the recognizer has consumed its result.
+        let hang_guard = Instant::now() + FIXTURE_HANG_GUARD;
+        self.exit.set();
+        wait_for_fixture_exit(&self.worker, hang_guard);
+        self.cleanup.wait_until_reported(&self.worker, hang_guard);
+        self.worker.finish()
+    }
+}
+
 #[test]
 fn shutdown_terminates_child_even_when_controller_is_delayed() {
     let (release, gate) = mpsc::channel();
@@ -229,7 +334,17 @@ fn shutdown_terminates_child_even_when_controller_is_delayed() {
 }
 impl NativeLoader for Loader {
     fn load(&mut self, _: NativeLanguage, _: &Range) -> Result<Box<dyn Recognizer>> {
-        Ok(Box::new(start(self.0)))
+        if self.0 != "exit-after-result" {
+            return Ok(Box::new(start(self.0)));
+        }
+        let mut command = command(self.0);
+        let exit = Signal::attach(&mut command, "fixture-exit");
+        let cleanup = CleanupSync::pause_controller();
+        Ok(Box::new(ReceiptRecovery {
+            worker: start_ready(command),
+            exit,
+            cleanup,
+        }))
     }
 }
 
