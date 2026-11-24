@@ -161,6 +161,9 @@ impl Worker {
             if wait_ms == 0 {
                 #[cfg(test)]
                 self.at_response_deadline();
+                if let Some(status) = self.child.try_wait()? {
+                    return Err(WorkerFailure::Exited(status).into());
+                }
                 return Err(error.into());
             }
             let status = self.child.wait_for(wait_ms)?;
@@ -237,6 +240,9 @@ impl Recognizer for Worker {
                 if started.elapsed() >= self.timeout {
                     #[cfg(test)]
                     self.at_response_deadline();
+                    if let Some(status) = self.child.try_wait()? {
+                        return Err(WorkerFailure::Exited(status).into());
+                    }
                     return Err(Failure::Timeout.into());
                 }
                 if path.exists() {

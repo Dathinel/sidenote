@@ -135,7 +135,7 @@
 
   "src/core/meeting_router/batches/linux_worker_tests.rs": "b844f337e5b561188cd282777f37a442ea93ff89807b8e836de5d28602f018d8",
 
-  "src/core/meeting_router/batches/worker.rs": "0fc6e11d908c211c2857de98d72b93b08680f46541b15da43cfcfe9322b9d85a",
+  "src/core/meeting_router/batches/worker.rs": "ed90fa94fe8b59611b880582d56291897c7643a433fec6c1c0275e79c1d715a2",
 
   "src/core/meeting_router/batches/worker/lifetime_tests.rs": "c927b6dd91599e016eff79bcad7fcfc57ffce673836ec027c251612f2f3dd15c",
 
