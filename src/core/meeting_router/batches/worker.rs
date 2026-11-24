@@ -27,10 +27,11 @@ impl std::error::Error for WorkerFailure {}
 type Cleanup = std::result::Result<(), WorkerFailure>;
 const SHUTDOWN_BOUND: Duration = Duration::from_millis(500);
 #[cfg(test)]
-type DeadlineHook = Box<dyn FnOnce(&crate::platform::JobProcess)>;
+type DeadlineHook = Box<dyn FnOnce(&Worker)>;
 #[cfg(test)]
 std::thread_local! {
     static CONTROLLER_GATE: std::cell::RefCell<Option<Receiver<()>>> = const { std::cell::RefCell::new(None) };
+    static CONTROLLER_REPORTED: std::cell::RefCell<Option<Sender<()>>> = const { std::cell::RefCell::new(None) };
     static AT_RESPONSE_DEADLINE: std::cell::RefCell<Option<DeadlineHook>> = const { std::cell::RefCell::new(None) };
 }
 fn controller(
@@ -40,6 +41,8 @@ fn controller(
 ) -> std::io::Result<(Sender<()>, Receiver<Cleanup>)> {
     #[cfg(test)]
     let gate = CONTROLLER_GATE.with(|slot| slot.borrow_mut().take());
+    #[cfg(test)]
+    let reported = CONTROLLER_REPORTED.with(|slot| slot.borrow_mut().take());
     let (stop, requests) = mpsc::channel();
     let (finished, cleanup) = mpsc::channel();
     drop(
@@ -78,6 +81,10 @@ fn controller(
                     }
                 })();
                 let _ = finished.send(result);
+                #[cfg(test)]
+                if let Some(reported) = reported {
+                    let _ = reported.send(());
+                }
                 // Retain both job and process handles until every descendant has terminated.
                 if result.is_err() {
                     while !matches!(drained(), Ok(true)) {
@@ -187,7 +194,7 @@ impl Worker {
     #[cfg(test)]
     fn at_response_deadline(&self) {
         if let Some(hook) = AT_RESPONSE_DEADLINE.with(|slot| slot.borrow_mut().take()) {
-            hook(&self.child);
+            hook(self);
         }
     }
     /// Wait at most 500 ms; a cleanup failure leaves the controller owning deferred reaping.
